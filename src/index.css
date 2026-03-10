@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+@layer base {
+  input[type="date"] {
+    appearance: none;
+    -webkit-appearance: none;
+    min-height: 1.2em;
+  }
+
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 12px);
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #e5e7eb;
+    border-radius: 10px;
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "name": "FOH Task Manager",
+  "description": "A comprehensive task management and temperature logging system for Front of House staff with email notifications and admin controls.",
+  "requestFramePermissions": []
+}

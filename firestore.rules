@@ -1,0 +1,138 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: categories
+// Fields:
+//   - name: string (required)
+//
+// Collection: time_slots
+// Fields:
+//   - name: string (required)
+//
+// Collection: staff
+// Fields:
+//   - name: string (required)
+//   - isActive: bool (required)
+//
+// Collection: tasks
+// Fields:
+//   - name: string (required)
+//   - category: string (required)
+//   - timeSlot: string (required)
+//   - isActive: bool (required)
+//
+// Collection: logs
+// Fields:
+//   - date: string (required)
+//   - taskId: string (required)
+//   - staffId: string (required)
+//   - timestamp: string (required)
+//   - taskName: string
+//   - staffName: string
+//
+// Collection: temperature_logs
+// Fields:
+//   - date: string (required)
+//   - type: string (required)
+//   - location: string (required)
+//   - temperature: number (required)
+//   - staffId: string (required)
+//   - staffName: string
+//   - timestamp: string (required)
+//
+// Collection: app_settings
+// Fields:
+//   - key: string (required)
+//   - value: string (required)
+//
+// Collection: notification_emails
+// Fields:
+//   - email: string (required)
+//   - isActive: bool (required)
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "justinleehaoen@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    match /{allPaths=**} {
+      allow read, write: if true;
+    }
+/*
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow create, update: if isAdmin();
+    }
+*/
+
+    match /categories/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /time_slots/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /staff/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /tasks/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /logs/{id} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+
+    match /temperature_logs/{id} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+
+    match /app_settings/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /notification_emails/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+  }
+}

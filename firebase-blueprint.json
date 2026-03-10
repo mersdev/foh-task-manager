@@ -1,0 +1,103 @@
+{
+  "entities": {
+    "Category": {
+      "title": "Category",
+      "description": "Task categories (e.g., Opening, Closing)",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" }
+      },
+      "required": ["name"]
+    },
+    "TimeSlot": {
+      "title": "TimeSlot",
+      "description": "Task time slots (e.g., Morning, Evening)",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" }
+      },
+      "required": ["name"]
+    },
+    "Staff": {
+      "title": "Staff",
+      "description": "Staff members",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["name", "isActive"]
+    },
+    "Task": {
+      "title": "Task",
+      "description": "Tasks to be completed",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "category": { "type": "string" },
+        "timeSlot": { "type": "string" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["name", "category", "timeSlot", "isActive"]
+    },
+    "Log": {
+      "title": "Log",
+      "description": "Completed task logs",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string" },
+        "taskId": { "type": "string" },
+        "staffId": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "taskName": { "type": "string" },
+        "staffName": { "type": "string" }
+      },
+      "required": ["date", "taskId", "staffId", "timestamp"]
+    },
+    "TemperatureLog": {
+      "title": "TemperatureLog",
+      "description": "Temperature readings",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string" },
+        "type": { "type": "string" },
+        "location": { "type": "string" },
+        "temperature": { "type": "number" },
+        "staffId": { "type": "string" },
+        "staffName": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["date", "type", "location", "temperature", "staffId", "timestamp"]
+    },
+    "AppSetting": {
+      "title": "AppSetting",
+      "description": "Application settings",
+      "type": "object",
+      "properties": {
+        "key": { "type": "string" },
+        "value": { "type": "string" }
+      },
+      "required": ["key", "value"]
+    },
+    "NotificationEmail": {
+      "title": "NotificationEmail",
+      "description": "Emails to notify on shift end",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["email", "isActive"]
+    }
+  },
+  "firestore": {
+    "/categories": { "schema": "Category", "description": "Collection of categories" },
+    "/time_slots": { "schema": "TimeSlot", "description": "Collection of time slots" },
+    "/staff": { "schema": "Staff", "description": "Collection of staff members" },
+    "/tasks": { "schema": "Task", "description": "Collection of tasks" },
+    "/logs": { "schema": "Log", "description": "Collection of task completion logs" },
+    "/temperature_logs": { "schema": "TemperatureLog", "description": "Collection of temperature logs" },
+    "/app_settings": { "schema": "AppSetting", "description": "Collection of app settings" },
+    "/notification_emails": { "schema": "NotificationEmail", "description": "Collection of notification emails" }
+  }
+}
