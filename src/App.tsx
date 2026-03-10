@@ -10,18 +10,15 @@ import {
   Plus,
   Trash2,
   UserCircle,
-  Thermometer,
-  LogOut,
-  Mail
+  Thermometer
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Task, Staff, Log, TemperatureLog, Category, TimeSlot, TabType, NotificationEmail } from './types';
-import { auth, signInWithGoogle, logout } from './firebase';
-import { onAuthStateChanged, User } from 'firebase/auth';
+import { Task, Staff, Log, TemperatureLog, Category, TimeSlot, TabType } from './types';
+import { apiFetch } from './service/apiClient';
+
+const TELEGRAM_CHAT_ID = import.meta.env.VITE_TELEGRAM_CHAT_ID ?? '';
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
   const [dataLoading, setDataLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>('checklist');
   const [isAdmin, setIsAdmin] = useState(false);
@@ -35,7 +32,6 @@ export default function App() {
   const [timeSlots, setTimeSlots] = useState<TimeSlot[]>([]);
   const [logs, setLogs] = useState<Log[]>([]);
   const [tempLogs, setTempLogs] = useState<TemperatureLog[]>([]);
-  const [notificationEmails, setNotificationEmails] = useState<NotificationEmail[]>([]);
   const [isShiftEnded, setIsShiftEnded] = useState(false);
   const [selectedTimezone, setSelectedTimezone] = useState("Asia/Singapore");
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
@@ -55,6 +51,8 @@ export default function App() {
     message: '',
     type: 'success'
   });
+  const [showShiftCloserModal, setShowShiftCloserModal] = useState(false);
+  const [isEndingShift, setIsEndingShift] = useState(false);
 
   // Selection states
   const [selectingStaffForTask, setSelectingStaffForTask] = useState<string | number | null>(null);
@@ -62,23 +60,13 @@ export default function App() {
   const [editingTask, setEditingTask] = useState<Task | null>(null);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUser(user);
-      setAuthLoading(false);
-    });
-    return () => unsubscribe();
+    bootstrapApp();
   }, []);
-
-  useEffect(() => {
-    if (user) {
-      bootstrapApp();
-    }
-  }, [user]);
 
   const bootstrapApp = async () => {
     setDataLoading(true);
     try {
-      const res = await fetch('/api/bootstrap');
+      const res = await apiFetch('/api/bootstrap');
       if (!res.ok) throw new Error(`Server error: ${res.status}`);
       const data = await res.json();
       
@@ -88,7 +76,6 @@ export default function App() {
       setTasks(data.tasks);
       setChecklist(data.checklist);
       setAdminPin(data.adminPin.pin);
-      setNotificationEmails(data.notificationEmails);
       setIsShiftEnded(data.shiftStatus.ended);
       if (data.settings.timezone) setSelectedTimezone(data.settings.timezone);
     } catch (error) {
@@ -100,25 +87,19 @@ export default function App() {
   };
 
   const fetchSettings = async () => {
-    const res = await fetch('/api/settings');
+    const res = await apiFetch('/api/settings');
     const data = await res.json();
     if (data.timezone) setSelectedTimezone(data.timezone);
   };
 
-  const fetchNotificationEmails = async () => {
-    const res = await fetch('/api/notification-emails');
-    const data = await res.json();
-    setNotificationEmails(data);
-  };
-
   const fetchShiftStatus = async () => {
-    const res = await fetch('/api/shift-status');
+    const res = await apiFetch('/api/shift-status');
     const data = await res.json();
     setIsShiftEnded(data.ended);
   };
 
   const fetchAdminPin = async () => {
-    const res = await fetch('/api/admin-pin');
+    const res = await apiFetch('/api/admin-pin');
     const data = await res.json();
     setAdminPin(data.pin);
   };
@@ -136,43 +117,43 @@ export default function App() {
   }, [activeTab, selectedDate]);
 
   const fetchStaff = async () => {
-    const res = await fetch('/api/staff');
+    const res = await apiFetch('/api/staff');
     const data = await res.json();
     setStaffList(data);
   };
 
   const fetchCategories = async () => {
-    const res = await fetch('/api/categories');
+    const res = await apiFetch('/api/categories');
     const data = await res.json();
     setCategories(data);
   };
 
   const fetchTimeSlots = async () => {
-    const res = await fetch('/api/time-slots');
+    const res = await apiFetch('/api/time-slots');
     const data = await res.json();
     setTimeSlots(data);
   };
 
   const fetchTasks = async () => {
-    const res = await fetch('/api/tasks');
+    const res = await apiFetch('/api/tasks');
     const data = await res.json();
     setTasks(data);
   };
 
   const fetchChecklist = async () => {
-    const res = await fetch('/api/checklist');
+    const res = await apiFetch('/api/checklist');
     const data = await res.json();
     setChecklist(data);
   };
 
   const fetchLogs = async (date: string) => {
-    const res = await fetch(`/api/logs?date=${date}`);
+    const res = await apiFetch(`/api/logs?date=${date}`);
     const data = await res.json();
     setLogs(data);
   };
 
   const fetchTempLogs = async (date: string) => {
-    const res = await fetch(`/api/temperature-logs?date=${date}`);
+    const res = await apiFetch(`/api/temperature-logs?date=${date}`);
     const data = await res.json();
     setTempLogs(data);
   };
@@ -185,7 +166,7 @@ export default function App() {
     const task = tasks.find(t => t.id === taskId);
     const staff = staffList.find(s => s.id === staffId);
 
-    const res = await fetch('/api/logs', {
+    const res = await apiFetch('/api/logs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -206,7 +187,7 @@ export default function App() {
       showToast("Shift has ended. Only admins can edit.", "error");
       return;
     }
-    const res = await fetch(`/api/logs/task/${taskId}`, {
+    const res = await apiFetch(`/api/logs/task/${taskId}`, {
       method: 'DELETE'
     });
     if (res.ok) {
@@ -221,7 +202,7 @@ export default function App() {
     }
     const staff = staffList.find(s => s.id === staffId);
 
-    const res = await fetch('/api/temperature-logs', {
+    const res = await apiFetch('/api/temperature-logs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -239,7 +220,7 @@ export default function App() {
   };
 
   const handleDeleteLog = async (id: string | number) => {
-    const res = await fetch(`/api/logs/${id}`, {
+    const res = await apiFetch(`/api/logs/${id}`, {
       method: 'DELETE'
     });
     if (res.ok) {
@@ -250,7 +231,7 @@ export default function App() {
   };
 
   const handleDeleteTempLog = async (id: string | number) => {
-    const res = await fetch(`/api/temperature-logs/${id}`, {
+    const res = await apiFetch(`/api/temperature-logs/${id}`, {
       method: 'DELETE'
     });
     if (res.ok) {
@@ -267,24 +248,42 @@ export default function App() {
     }
   };
 
-  const handleEndShift = async () => {
+  const handleEndShift = async (closedBy?: string) => {
+    if (isEndingShift) {
+      return;
+    }
+
     const newStatus = !isShiftEnded;
-    const res = await fetch('/api/end-shift', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        ended: newStatus,
-        userEmail: user?.email 
-      })
-    });
-    if (res.ok) {
-      setIsShiftEnded(newStatus);
-      showToast(newStatus ? "Shift ended and notifications sent" : "Shift reopened");
+
+    if (newStatus && !closedBy) {
+      setShowShiftCloserModal(true);
+      return;
+    }
+
+    setIsEndingShift(true);
+    try {
+      const res = await apiFetch('/api/end-shift', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ended: newStatus, closedBy })
+      });
+
+      if (res.ok) {
+        setIsShiftEnded(newStatus);
+        setShowShiftCloserModal(false);
+        showToast(newStatus ? `Shift ended by ${closedBy}. Telegram sent.` : "Shift reopened");
+        return;
+      }
+
+      const data = await res.json();
+      showToast(data.error || 'Failed to update shift status', 'error');
+    } finally {
+      setIsEndingShift(false);
     }
   };
 
   const updateTimezone = async (tz: string) => {
-    const res = await fetch('/api/settings', {
+    const res = await apiFetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key: 'timezone', value: tz })
@@ -316,7 +315,7 @@ export default function App() {
   };
 
   const handleChangePin = async (newPin: string) => {
-    const res = await fetch('/api/admin-pin', {
+    const res = await apiFetch('/api/admin-pin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pin: newPin })
@@ -330,46 +329,20 @@ export default function App() {
     }
   };
 
-  if (authLoading || (user && dataLoading)) {
+  if (dataLoading) {
     return (
       <div className="min-h-screen bg-stone-50 flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
           <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
-          <p className="text-stone-400 font-bold text-sm animate-pulse">
-            {authLoading ? 'Authenticating...' : 'Loading your checklist...'}
-          </p>
+          <p className="text-stone-400 font-bold text-sm animate-pulse">Loading your checklist...</p>
         </div>
       </div>
     );
   }
 
-  if (!user) {
-    return (
-      <div className="min-h-screen bg-stone-50 flex items-center justify-center p-6">
-        <motion.div 
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="bg-white p-8 rounded-[2.5rem] border border-stone-200 shadow-xl max-w-md w-full text-center space-y-8"
-        >
-          <div className="w-20 h-20 bg-emerald-100 rounded-3xl flex items-center justify-center mx-auto">
-            <CheckCircle2 className="text-emerald-600 w-10 h-10" />
-          </div>
-          <div className="space-y-2">
-            <h1 className="text-3xl font-black text-stone-900">FOH Tasks</h1>
-            <p className="text-stone-500 font-medium">Please sign in to access the checklist</p>
-          </div>
-          <button 
-            onClick={signInWithGoogle}
-            className="w-full flex items-center justify-center gap-3 bg-stone-900 text-white py-4 rounded-2xl font-bold hover:bg-stone-800 transition-all active:scale-95 shadow-lg shadow-stone-900/20"
-          >
-            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-6 h-6" alt="Google" />
-            Sign in with Google
-          </button>
-          <p className="text-[10px] text-stone-400 uppercase tracking-widest font-black">Authorized Personnel Only</p>
-        </motion.div>
-      </div>
-    );
-  }
+  const shiftCloserOptions: string[] = Array.from(
+    new Set(staffList.map((staff) => staff.name).filter((name) => name.trim().length > 0)),
+  );
 
   return (
     <div className="min-h-screen bg-stone-50 pb-24 flex flex-col">
@@ -378,21 +351,31 @@ export default function App() {
         <div className="flex items-center gap-3">
           <button 
             onClick={() => {
+              if (isEndingShift) {
+                return;
+              }
+
               if (isShiftEnded && !isAdmin) {
                 showToast("Shift has ended. Only admins can reopen.", "error");
                 return;
               }
-              triggerConfirm(
-                isShiftEnded ? 'Reopen Shift' : 'End Shift',
-                isShiftEnded ? 'Are you sure you want to reopen the shift?' : 'End shift and lock checklist? This will notify the team.',
-                handleEndShift
-              );
+              if (isShiftEnded) {
+                triggerConfirm(
+                  'Reopen Shift',
+                  'Are you sure you want to reopen the shift?',
+                  () => handleEndShift()
+                );
+                return;
+              }
+
+              setShowShiftCloserModal(true);
             }}
             className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all shadow-sm ${
               isShiftEnded 
                 ? 'bg-stone-800 text-white hover:bg-stone-900' 
                 : 'bg-red-600 text-white hover:bg-red-700 shadow-red-600/20'
             }`}
+            disabled={isEndingShift}
           >
             {isShiftEnded ? 'Reopen Shift' : 'End Shift'}
           </button>
@@ -409,20 +392,6 @@ export default function App() {
         </div>
         
         <div className="flex items-center gap-2">
-          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-stone-50 border border-stone-200 rounded-full">
-            <div className="w-5 h-5 bg-emerald-100 rounded-full flex items-center justify-center text-[10px] font-bold text-emerald-700">
-              {user.email?.charAt(0).toUpperCase()}
-            </div>
-            <span className="text-[10px] font-bold text-stone-500 truncate max-w-[100px]">{user.email}</span>
-          </div>
-          <button 
-            onClick={logout}
-            className="p-2 text-stone-400 hover:text-red-500 transition-colors"
-            title="Logout"
-          >
-            <LogOut className="w-5 h-5" />
-          </button>
-          <div className="h-6 w-[1px] bg-stone-200 mx-1"></div>
           <button 
             onClick={handleAdminToggle}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all ${
@@ -532,7 +501,7 @@ export default function App() {
                             'Delete Task',
                             `Are you sure you want to delete "${task.name}"?`,
                             async () => {
-                              await fetch(`/api/tasks/${task.id}`, { method: 'DELETE' });
+                              await apiFetch(`/api/tasks/${task.id}`, { method: 'DELETE' });
                               fetchTasks();
                               fetchChecklist();
                             }
@@ -587,7 +556,7 @@ export default function App() {
                             'Remove Staff',
                             `Are you sure you want to remove "${staff.name}"?`,
                             async () => {
-                              await fetch(`/api/staff/${staff.id}`, { method: 'DELETE' });
+                              await apiFetch(`/api/staff/${staff.id}`, { method: 'DELETE' });
                               fetchStaff();
                             }
                           )}
@@ -798,7 +767,7 @@ export default function App() {
                   title="Categories" 
                   items={categories} 
                   onAdd={async (name) => {
-                    await fetch('/api/categories', {
+                    await apiFetch('/api/categories', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ name })
@@ -806,7 +775,7 @@ export default function App() {
                     fetchCategories();
                   }}
                   onUpdate={async (id, name) => {
-                    await fetch(`/api/categories/${id}`, {
+                    await apiFetch(`/api/categories/${id}`, {
                       method: 'PUT',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ name })
@@ -819,7 +788,7 @@ export default function App() {
                       'Delete Category',
                       `Delete category "${cat?.name}"? This will not delete tasks but may affect filtering.`,
                       async () => {
-                        await fetch(`/api/categories/${id}`, { method: 'DELETE' });
+                        await apiFetch(`/api/categories/${id}`, { method: 'DELETE' });
                         fetchCategories();
                       }
                     );
@@ -830,7 +799,7 @@ export default function App() {
                   title="Time Slots" 
                   items={timeSlots} 
                   onAdd={async (name) => {
-                    await fetch('/api/time-slots', {
+                    await apiFetch('/api/time-slots', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ name })
@@ -838,7 +807,7 @@ export default function App() {
                     fetchTimeSlots();
                   }}
                   onUpdate={async (id, name) => {
-                    await fetch(`/api/time-slots/${id}`, {
+                    await apiFetch(`/api/time-slots/${id}`, {
                       method: 'PUT',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ name })
@@ -851,7 +820,7 @@ export default function App() {
                       'Delete Time Slot',
                       `Delete time slot "${slot?.name}"?`,
                       async () => {
-                        await fetch(`/api/time-slots/${id}`, { method: 'DELETE' });
+                        await apiFetch(`/api/time-slots/${id}`, { method: 'DELETE' });
                         fetchTimeSlots();
                       }
                     );
@@ -880,12 +849,23 @@ export default function App() {
                   </div>
                 </div>
 
-                <EmailSettings 
-                  emails={notificationEmails}
-                  onRefresh={fetchNotificationEmails}
-                  triggerConfirm={triggerConfirm}
-                  showToast={showToast}
-                />
+                <div className="space-y-4">
+                  <h2 className="text-xs font-black text-stone-400 uppercase tracking-[0.2em] px-1">Telegram Notifications</h2>
+                  <div className="bg-white p-6 rounded-3xl border border-stone-200 shadow-sm space-y-3">
+                    <p className="text-sm text-stone-600">
+                      Shift closing sends a Telegram Bot API message.
+                    </p>
+                    <div className="p-3 bg-stone-50 rounded-xl border border-stone-200">
+                      <p className="text-[10px] font-black uppercase text-stone-400">Target Chat ID</p>
+                      <p className="text-sm font-bold text-stone-700 break-all">
+                        {TELEGRAM_CHAT_ID || 'Not configured'}
+                      </p>
+                    </div>
+                    <p className="text-[10px] text-stone-400 italic">
+                      Configure `VITE_TELEGRAM_BOT_TOKEN` and `VITE_TELEGRAM_CHAT_ID` in `.env`.
+                    </p>
+                  </div>
+                </div>
 
                 <div className="space-y-4">
                   <h2 className="text-xs font-black text-stone-400 uppercase tracking-[0.2em] px-1">Security</h2>
@@ -979,6 +959,46 @@ export default function App() {
             <button 
               onClick={() => setSelectingStaffForTask(null)}
               className="mt-6 w-full p-4 bg-stone-100 text-stone-600 font-bold rounded-2xl"
+            >
+              Cancel
+            </button>
+          </motion.div>
+        </div>
+      )}
+
+      {/* End Shift Closer Modal */}
+      {showShiftCloserModal && (
+        <div className="fixed inset-0 bg-stone-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-6">
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-white w-full max-w-md rounded-3xl p-8 shadow-2xl"
+          >
+            <div className="flex flex-col items-center mb-6">
+              <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mb-3">
+                <Lock className="text-red-600 w-6 h-6" />
+              </div>
+              <h3 className="text-xl font-bold text-stone-900">Who is closing this session?</h3>
+              <p className="text-stone-500 text-sm">Select one name to end shift</p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              {(shiftCloserOptions.length > 0 ? shiftCloserOptions : ['Unknown']).map((closer: string) => (
+                <button
+                  key={closer}
+                  onClick={() => handleEndShift(closer)}
+                  className="p-4 bg-stone-50 hover:bg-red-50 border border-stone-200 hover:border-red-200 rounded-2xl font-bold text-stone-700 transition-all disabled:opacity-50"
+                  disabled={isEndingShift}
+                >
+                  {closer}
+                </button>
+              ))}
+            </div>
+
+            <button
+              onClick={() => setShowShiftCloserModal(false)}
+              className="mt-6 w-full p-4 bg-stone-100 text-stone-600 font-bold rounded-2xl disabled:opacity-50"
+              disabled={isEndingShift}
             >
               Cancel
             </button>
@@ -1223,7 +1243,7 @@ function AddTaskForm({ categories, timeSlots, onAdded, editingTask, onCancelEdit
     const url = editingTask ? `/api/tasks/${editingTask.id}` : '/api/tasks';
     const method = editingTask ? 'PUT' : 'POST';
 
-    await fetch(url, {
+    await apiFetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, category, timeSlot })
@@ -1300,7 +1320,7 @@ function AddStaffForm({ onAdded, editingStaff, onCancelEdit }: { onAdded: () => 
     const url = editingStaff ? `/api/staff/${editingStaff.id}` : '/api/staff';
     const method = editingStaff ? 'PUT' : 'POST';
 
-    await fetch(url, {
+    await apiFetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name })
@@ -1340,111 +1360,6 @@ function AddStaffForm({ onAdded, editingStaff, onCancelEdit }: { onAdded: () => 
         </button>
       </div>
     </form>
-  );
-}
-
-function EmailSettings({ emails, onRefresh, triggerConfirm, showToast }: { emails: NotificationEmail[], onRefresh: () => void, triggerConfirm: (t: string, m: string, c: () => void) => void, showToast: (m: string, t?: 'success' | 'error') => void }) {
-  const [newEmail, setNewEmail] = useState("");
-
-  const handleAdd = async () => {
-    if (!newEmail || !newEmail.includes('@')) {
-      showToast("Invalid email", "error");
-      return;
-    }
-    const res = await fetch('/api/notification-emails', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: newEmail })
-    });
-    if (res.ok) {
-      setNewEmail("");
-      onRefresh();
-      showToast("Email added");
-    } else {
-      const data = await res.json();
-      showToast(data.error || "Failed to add email", "error");
-    }
-  };
-
-  const handleToggle = async (email: NotificationEmail) => {
-    const res = await fetch(`/api/notification-emails/${email.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: email.email, isActive: !email.isActive })
-    });
-    if (res.ok) {
-      onRefresh();
-    }
-  };
-
-  const handleDelete = (email: NotificationEmail) => {
-    triggerConfirm(
-      'Remove Email',
-      `Stop sending notifications to ${email.email}?`,
-      async () => {
-        const res = await fetch(`/api/notification-emails/${email.id}`, { method: 'DELETE' });
-        if (res.ok) {
-          onRefresh();
-          showToast("Email removed");
-        }
-      }
-    );
-  };
-
-  return (
-    <div className="space-y-4">
-      <h2 className="text-xs font-black text-stone-400 uppercase tracking-[0.2em] px-1">Notification Emails</h2>
-      <div className="bg-white p-6 rounded-3xl border border-stone-200 shadow-sm space-y-6">
-        <div className="flex gap-2">
-          <input 
-            type="email"
-            placeholder="manager@example.com"
-            value={newEmail}
-            onChange={(e) => setNewEmail(e.target.value)}
-            className="flex-1 p-3 bg-stone-50 border border-stone-200 rounded-xl font-bold text-stone-800 focus:outline-none"
-          />
-          <button 
-            onClick={handleAdd}
-            className="bg-emerald-600 text-white px-4 rounded-xl font-bold"
-          >
-            Add
-          </button>
-        </div>
-        
-        <div className="space-y-3">
-          {emails.map(email => (
-            <div key={email.id} className="flex items-center justify-between p-4 bg-stone-50 rounded-2xl border border-stone-100">
-              <div className="flex flex-col">
-                <span className={`font-bold text-sm ${email.isActive ? 'text-stone-800' : 'text-stone-400 line-through'}`}>
-                  {email.email}
-                </span>
-                <span className="text-[10px] font-black uppercase text-stone-400">
-                  {email.isActive ? 'Active' : 'Inactive'}
-                </span>
-              </div>
-              <div className="flex items-center gap-3">
-                <button 
-                  onClick={() => handleToggle(email)}
-                  className={`w-10 h-6 rounded-full transition-all relative ${email.isActive ? 'bg-emerald-500' : 'bg-stone-300'}`}
-                >
-                  <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${email.isActive ? 'left-5' : 'left-1'}`} />
-                </button>
-                <button 
-                  onClick={() => handleDelete(email)}
-                  className="text-stone-300 hover:text-red-500 transition-colors"
-                >
-                  <Trash2 className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-          ))}
-          {emails.length === 0 && (
-            <p className="text-center py-4 text-xs text-stone-400 italic">No notification emails configured.</p>
-          )}
-        </div>
-        <p className="text-[10px] text-stone-400 italic">These emails will receive a report when "End Shift" is pressed.</p>
-      </div>
-    </div>
   );
 }
 

@@ -44,9 +44,3 @@ export interface TimeSlot {
 }
 
 export type TabType = 'checklist' | 'edit-tasks' | 'staff' | 'logs' | 'settings' | 'temperatures';
-
-export interface NotificationEmail {
-  id: string | number;
-  email: string;
-  isActive: number | boolean;
-}
