@@ -22,5 +22,14 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "include": [
+    "src",
+    "vite.config.ts"
+  ],
+  "exclude": [
+    "foh-task-manager (1)",
+    "dist",
+    "node_modules"
+  ]
 }

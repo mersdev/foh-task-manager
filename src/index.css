@@ -21,4 +21,12 @@
     background: #e5e7eb;
     border-radius: 10px;
   }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
 }

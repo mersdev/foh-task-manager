@@ -81,6 +81,27 @@ async function setSetting(key: string, value: string) {
   );
 }
 
+async function getNextSortOrder(table: 'categories' | 'time_slots' | 'staff' | 'tasks') {
+  const row = await queryOne<{ sortOrder?: number | null }>(
+    supabase.from(table).select('sortOrder').order('sortOrder', { ascending: false }).limit(1).maybeSingle(),
+    `get next ${table} sort order`,
+  );
+
+  return Number(row?.sortOrder ?? 0) + 1;
+}
+
+async function applySortOrder(
+  table: 'categories' | 'time_slots' | 'staff' | 'tasks',
+  ids: Array<string | number>,
+) {
+  for (let index = 0; index < ids.length; index += 1) {
+    await execute(
+      supabase.from(table).update({ sortOrder: index + 1 }).eq('id', ids[index]),
+      `reorder ${table}`,
+    );
+  }
+}
+
 async function getTimezone() {
   try {
     const settings = await fetchSettingsMap();
@@ -219,18 +240,28 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
 
     if (path === '/api/categories' && method === 'GET') {
       const categories = await queryMany<EntityRow>(
-        supabase.from('categories').select('*').order('name', { ascending: true }),
+        supabase.from('categories').select('*').order('sortOrder', { ascending: true }).order('id', { ascending: true }),
         'list categories',
       );
       return jsonResponse(categories);
     }
 
     if (path === '/api/categories' && method === 'POST') {
+      const nextSortOrder = await getNextSortOrder('categories');
       const category = await queryOne<EntityRow>(
-        supabase.from('categories').insert({ name: body.name }).select('*').single(),
+        supabase.from('categories').insert({ name: body.name, sortOrder: nextSortOrder }).select('*').single(),
         'create category',
       );
       return jsonResponse(category);
+    }
+
+    if (path === '/api/categories/reorder' && method === 'POST') {
+      const categoryIds = Array.isArray(body.categoryIds) ? (body.categoryIds as Array<string | number>) : null;
+      if (!categoryIds) {
+        return jsonResponse({ error: 'Invalid input' }, 400);
+      }
+      await applySortOrder('categories', categoryIds);
+      return jsonResponse({ success: true });
     }
 
     const categoryMatch = path.match(/^\/api\/categories\/(.+)$/);
@@ -249,18 +280,28 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
 
     if (path === '/api/time-slots' && method === 'GET') {
       const timeSlots = await queryMany<EntityRow>(
-        supabase.from('time_slots').select('*').order('name', { ascending: true }),
+        supabase.from('time_slots').select('*').order('sortOrder', { ascending: true }).order('id', { ascending: true }),
         'list time slots',
       );
       return jsonResponse(timeSlots);
     }
 
     if (path === '/api/time-slots' && method === 'POST') {
+      const nextSortOrder = await getNextSortOrder('time_slots');
       const slot = await queryOne<EntityRow>(
-        supabase.from('time_slots').insert({ name: body.name }).select('*').single(),
+        supabase.from('time_slots').insert({ name: body.name, sortOrder: nextSortOrder }).select('*').single(),
         'create time slot',
       );
       return jsonResponse(slot);
+    }
+
+    if (path === '/api/time-slots/reorder' && method === 'POST') {
+      const timeSlotIds = Array.isArray(body.timeSlotIds) ? (body.timeSlotIds as Array<string | number>) : null;
+      if (!timeSlotIds) {
+        return jsonResponse({ error: 'Invalid input' }, 400);
+      }
+      await applySortOrder('time_slots', timeSlotIds);
+      return jsonResponse({ success: true });
     }
 
     const slotMatch = path.match(/^\/api\/time-slots\/(.+)$/);
@@ -279,18 +320,28 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
 
     if (path === '/api/staff' && method === 'GET') {
       const staff = await queryMany<EntityRow>(
-        supabase.from('staff').select('*').eq('isActive', true).order('name', { ascending: true }),
+        supabase.from('staff').select('*').eq('isActive', true).order('sortOrder', { ascending: true }).order('id', { ascending: true }),
         'list staff',
       );
       return jsonResponse(staff);
     }
 
     if (path === '/api/staff' && method === 'POST') {
+      const nextSortOrder = await getNextSortOrder('staff');
       const staff = await queryOne<EntityRow>(
-        supabase.from('staff').insert({ name: body.name, isActive: true }).select('*').single(),
+        supabase.from('staff').insert({ name: body.name, isActive: true, sortOrder: nextSortOrder }).select('*').single(),
         'create staff',
       );
       return jsonResponse(staff);
+    }
+
+    if (path === '/api/staff/reorder' && method === 'POST') {
+      const staffIds = Array.isArray(body.staffIds) ? (body.staffIds as Array<string | number>) : null;
+      if (!staffIds) {
+        return jsonResponse({ error: 'Invalid input' }, 400);
+      }
+      await applySortOrder('staff', staffIds);
+      return jsonResponse({ success: true });
     }
 
     const staffMatch = path.match(/^\/api\/staff\/(.+)$/);
@@ -312,7 +363,7 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
 
     if (path === '/api/tasks' && method === 'GET') {
       const tasks = await queryMany<EntityRow>(
-        supabase.from('tasks').select('*').eq('isActive', true),
+        supabase.from('tasks').select('*').eq('isActive', true).order('sortOrder', { ascending: true }).order('id', { ascending: true }),
         'list tasks',
       );
       return jsonResponse(tasks);
@@ -320,11 +371,21 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
 
     if (path === '/api/tasks' && method === 'POST') {
       const { name, category, timeSlot } = body;
+      const nextSortOrder = await getNextSortOrder('tasks');
       const task = await queryOne<EntityRow>(
-        supabase.from('tasks').insert({ name, category, timeSlot, isActive: true }).select('*').single(),
+        supabase.from('tasks').insert({ name, category, timeSlot, isActive: true, sortOrder: nextSortOrder }).select('*').single(),
         'create task',
       );
       return jsonResponse(task);
+    }
+
+    if (path === '/api/tasks/reorder' && method === 'POST') {
+      const taskIds = Array.isArray(body.taskIds) ? (body.taskIds as Array<string | number>) : null;
+      if (!taskIds) {
+        return jsonResponse({ error: 'Invalid input' }, 400);
+      }
+      await applySortOrder('tasks', taskIds);
+      return jsonResponse({ success: true });
     }
 
     const taskMatch = path.match(/^\/api\/tasks\/(.+)$/);
@@ -349,8 +410,16 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
 
     if (path === '/api/logs' && method === 'GET') {
       const date = String(url.searchParams.get('date') ?? '');
+      const startDate = url.searchParams.get('startDate');
+      const endDate = url.searchParams.get('endDate');
+      let query = supabase.from('logs').select('*');
+      if (startDate && endDate) {
+        query = query.gte('date', startDate).lte('date', endDate);
+      } else {
+        query = query.eq('date', date);
+      }
       const logs = await queryMany<EntityRow>(
-        supabase.from('logs').select('*').eq('date', date).order('timestamp', { ascending: false }),
+        query.order('date', { ascending: false }).order('timestamp', { ascending: false }),
         'list logs',
       );
       return jsonResponse(logs);
@@ -358,8 +427,16 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
 
     if (path === '/api/temperature-logs' && method === 'GET') {
       const date = String(url.searchParams.get('date') ?? '');
+      const startDate = url.searchParams.get('startDate');
+      const endDate = url.searchParams.get('endDate');
+      let query = supabase.from('temperature_logs').select('*');
+      if (startDate && endDate) {
+        query = query.gte('date', startDate).lte('date', endDate);
+      } else {
+        query = query.eq('date', date);
+      }
       const logs = await queryMany<EntityRow>(
-        supabase.from('temperature_logs').select('*').eq('date', date).order('timestamp', { ascending: false }),
+        query.order('date', { ascending: false }).order('timestamp', { ascending: false }),
         'list temperature logs',
       );
       return jsonResponse(logs);
@@ -423,7 +500,10 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
     if (path === '/api/checklist' && method === 'GET') {
       const { date } = await getLocalTime();
       const [tasks, logs] = await Promise.all([
-        queryMany<EntityRow>(supabase.from('tasks').select('*').eq('isActive', true), 'list checklist tasks'),
+        queryMany<EntityRow>(
+          supabase.from('tasks').select('*').eq('isActive', true).order('sortOrder', { ascending: true }).order('id', { ascending: true }),
+          'list checklist tasks',
+        ),
         queryMany<EntityRow>(supabase.from('logs').select('*').eq('date', date), 'list checklist logs'),
       ]);
       return jsonResponse(attachCompleted(tasks, logs));
@@ -433,18 +513,21 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
       const { date } = await getLocalTime();
       const [staff, categories, timeSlots, tasks, logs, settings] = await Promise.all([
         queryMany<EntityRow>(
-          supabase.from('staff').select('*').eq('isActive', true).order('name', { ascending: true }),
+          supabase.from('staff').select('*').eq('isActive', true).order('sortOrder', { ascending: true }).order('id', { ascending: true }),
           'bootstrap staff',
         ),
         queryMany<EntityRow>(
-          supabase.from('categories').select('*').order('name', { ascending: true }),
+          supabase.from('categories').select('*').order('sortOrder', { ascending: true }).order('id', { ascending: true }),
           'bootstrap categories',
         ),
         queryMany<EntityRow>(
-          supabase.from('time_slots').select('*').order('name', { ascending: true }),
+          supabase.from('time_slots').select('*').order('sortOrder', { ascending: true }).order('id', { ascending: true }),
           'bootstrap time slots',
         ),
-        queryMany<EntityRow>(supabase.from('tasks').select('*').eq('isActive', true), 'bootstrap tasks'),
+        queryMany<EntityRow>(
+          supabase.from('tasks').select('*').eq('isActive', true).order('sortOrder', { ascending: true }).order('id', { ascending: true }),
+          'bootstrap tasks',
+        ),
         queryMany<EntityRow>(supabase.from('logs').select('*').eq('date', date), 'bootstrap logs'),
         fetchSettingsMap(),
       ]);

@@ -10,16 +10,153 @@ import {
   Plus,
   Trash2,
   UserCircle,
-  Thermometer
+  Thermometer,
+  RefreshCcw,
+  Download,
+  GripVertical
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useScroll, useMotionValue, useTransform } from 'motion/react';
+import * as XLSX from 'xlsx';
+import {
+  DndContext, 
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { Task, Staff, Log, TemperatureLog, Category, TimeSlot, TabType } from './types';
 import { apiFetch } from './service/apiClient';
 
 const TELEGRAM_CHAT_ID = import.meta.env.VITE_TELEGRAM_CHAT_ID ?? '';
 
+const SortableTaskItem: React.FC<{ 
+  task: Task; 
+  onEdit: (task: Task) => void; 
+  onDelete: (id: string | number) => void;
+}> = ({ 
+  task, 
+  onEdit, 
+  onDelete 
+}) => {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging
+  } = useSortable({ id: task.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 10 : 1,
+    opacity: isDragging ? 0.5 : 1
+  };
+
+  return (
+    <div 
+      ref={setNodeRef} 
+      style={style}
+      className="bg-white p-4 rounded-2xl border border-stone-200 flex items-center justify-between shadow-sm"
+    >
+      <div className="flex items-center gap-3">
+        <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing p-1 text-stone-400 hover:text-stone-600">
+          <GripVertical className="w-5 h-5" />
+        </div>
+        <div>
+          <p className="font-bold text-stone-800">{task.name}</p>
+          <p className="text-xs text-stone-500">{task.category} • {task.timeSlot}</p>
+        </div>
+      </div>
+      <div className="flex gap-2">
+        <button 
+          onClick={() => onEdit(task)}
+          className="p-2 text-stone-400 hover:text-emerald-500 transition-colors"
+        >
+          <ClipboardList className="w-5 h-5" />
+        </button>
+        <button 
+          onClick={() => onDelete(task.id)}
+          className="p-2 text-stone-400 hover:text-red-500 transition-colors"
+        >
+          <Trash2 className="w-5 h-5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const SortableStaffItem: React.FC<{
+  staff: Staff;
+  isAdmin: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
+}> = ({ staff, isAdmin, onEdit, onDelete }) => {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging
+  } = useSortable({ id: staff.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 10 : 1,
+    opacity: isDragging ? 0.5 : 1
+  };
+
+  return (
+    <div 
+      ref={setNodeRef} 
+      style={style}
+      className="bg-white p-4 rounded-2xl border border-stone-200 flex items-center justify-between shadow-sm"
+    >
+      <div className="flex items-center gap-3">
+        {isAdmin && (
+          <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing p-1 text-stone-400 hover:text-stone-600">
+            <GripVertical className="w-5 h-5" />
+          </div>
+        )}
+        <div className="w-8 h-8 bg-stone-100 rounded-full flex items-center justify-center text-xs font-bold text-stone-500">
+          {staff.name.charAt(0)}
+        </div>
+        <p className="font-bold text-stone-800">{staff.name}</p>
+      </div>
+      {isAdmin && (
+        <div className="flex gap-2">
+          <button 
+            onClick={onEdit}
+            className="p-2 text-stone-400 hover:text-emerald-500 transition-colors"
+          >
+            <Users className="w-5 h-5" />
+          </button>
+          <button 
+            onClick={onDelete}
+            className="p-2 text-stone-400 hover:text-red-500 transition-colors"
+          >
+            <Trash2 className="w-5 h-5" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
 export default function App() {
-  const [dataLoading, setDataLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>('checklist');
   const [isAdmin, setIsAdmin] = useState(false);
   const [pinInput, setPinInput] = useState("");
@@ -33,8 +170,24 @@ export default function App() {
   const [logs, setLogs] = useState<Log[]>([]);
   const [tempLogs, setTempLogs] = useState<TemperatureLog[]>([]);
   const [isShiftEnded, setIsShiftEnded] = useState(false);
-  const [selectedTimezone, setSelectedTimezone] = useState("Asia/Singapore");
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedTimezone, setSelectedTimezone] = useState("Asia/Kuala_Lumpur");
+  
+  const getTodayInTimezone = (tz: string) => {
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+    return formatter.format(now);
+  };
+
+  const [selectedDate, setSelectedDate] = useState(getTodayInTimezone("Asia/Kuala_Lumpur"));
+  const [exportRange, setExportRange] = useState({
+    start: getTodayInTimezone("Asia/Kuala_Lumpur"),
+    end: getTodayInTimezone("Asia/Kuala_Lumpur")
+  });
   const [checklist, setChecklist] = useState<(Task & { completed: number })[]>([]);
   const [logVariant, setLogVariant] = useState<'checklist' | 'temperatures'>('checklist');
 
@@ -51,45 +204,92 @@ export default function App() {
     message: '',
     type: 'success'
   });
-  const [showShiftCloserModal, setShowShiftCloserModal] = useState(false);
-  const [isEndingShift, setIsEndingShift] = useState(false);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      setTasks((items: Task[]) => {
+        const oldIndex = items.findIndex((i) => i.id === active.id);
+        const newIndex = items.findIndex((i) => i.id === over.id);
+        const newTasks = arrayMove(items, oldIndex, newIndex);
+        
+        // Save to backend
+        saveReorder(newTasks.map(t => t.id));
+        
+        return newTasks;
+      });
+    }
+  };
+
+  const saveReorder = async (taskIds: (string | number)[]) => {
+    try {
+      const res = await apiFetch('/api/tasks/reorder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskIds })
+      });
+      if (res.ok) {
+        fetchChecklist();
+      }
+    } catch (error) {
+      console.error("Failed to save reorder", error);
+    }
+  };
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const pullDistance = useMotionValue(0);
+  const pullOpacity = useTransform(pullDistance, [0, 100], [0, 1]);
+  const pullRotation = useTransform(pullDistance, [0, 100], [0, 360]);
 
   // Selection states
   const [selectingStaffForTask, setSelectingStaffForTask] = useState<string | number | null>(null);
   const [editingStaff, setEditingStaff] = useState<Staff | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
 
-  useEffect(() => {
-    bootstrapApp();
-  }, []);
-
-  const bootstrapApp = async () => {
-    setDataLoading(true);
-    try {
-      const res = await apiFetch('/api/bootstrap');
-      if (!res.ok) throw new Error(`Server error: ${res.status}`);
-      const data = await res.json();
-      
-      setStaffList(data.staff);
-      setCategories(data.categories);
-      setTimeSlots(data.timeSlots);
-      setTasks(data.tasks);
-      setChecklist(data.checklist);
-      setAdminPin(data.adminPin.pin);
-      setIsShiftEnded(data.shiftStatus.ended);
-      if (data.settings.timezone) setSelectedTimezone(data.settings.timezone);
-    } catch (error) {
-      console.error("Failed to bootstrap app:", error);
-      showToast("Failed to load initial data", "error");
-    } finally {
-      setDataLoading(false);
-    }
+  const refreshAll = async () => {
+    setIsRefreshing(true);
+    await Promise.all([
+      fetchStaff(),
+      fetchCategories(),
+      fetchTimeSlots(),
+      fetchTasks(),
+      fetchChecklist(),
+      fetchAdminPin(),
+      fetchSettings(),
+      fetchShiftStatus(),
+      fetchLogs(selectedDate),
+      fetchTempLogs(selectedDate)
+    ]);
+    setIsRefreshing(false);
+    pullDistance.set(0);
   };
+
+  useEffect(() => {
+    fetchStaff();
+    fetchCategories();
+    fetchTimeSlots();
+    fetchTasks();
+    fetchChecklist();
+    fetchAdminPin();
+    fetchSettings();
+    fetchShiftStatus();
+  }, []);
 
   const fetchSettings = async () => {
     const res = await apiFetch('/api/settings');
     const data = await res.json();
-    if (data.timezone) setSelectedTimezone(data.timezone);
+    if (data.timezone) {
+      setSelectedTimezone(data.timezone);
+      const today = getTodayInTimezone(data.timezone);
+      setSelectedDate(today);
+      setExportRange({ start: today, end: today });
+    }
   };
 
   const fetchShiftStatus = async () => {
@@ -106,10 +306,8 @@ export default function App() {
 
   useEffect(() => {
     if (activeTab === 'logs') {
-      Promise.all([
-        fetchLogs(selectedDate),
-        fetchTempLogs(selectedDate)
-      ]);
+      fetchLogs(selectedDate);
+      fetchTempLogs(selectedDate);
     }
     if (activeTab === 'temperatures') {
       fetchTempLogs(selectedDate);
@@ -138,6 +336,7 @@ export default function App() {
     const res = await apiFetch('/api/tasks');
     const data = await res.json();
     setTasks(data);
+    fetchChecklist(); // Ensure checklist is updated when tasks change
   };
 
   const fetchChecklist = async () => {
@@ -158,23 +357,15 @@ export default function App() {
     setTempLogs(data);
   };
 
-  const handleCompleteTask = async (taskId: string | number, staffId: string | number) => {
+  const handleCompleteTask = async (taskId: number, staffId: number) => {
     if (isShiftEnded && !isAdmin) {
       showToast("Shift has ended. Only admins can edit.", "error");
       return;
     }
-    const task = tasks.find(t => t.id === taskId);
-    const staff = staffList.find(s => s.id === staffId);
-
     const res = await apiFetch('/api/logs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        taskId, 
-        staffId,
-        taskName: task?.name,
-        staffName: staff?.name
-      })
+      body: JSON.stringify({ taskId, staffId })
     });
     if (res.ok) {
       setSelectingStaffForTask(null);
@@ -182,7 +373,7 @@ export default function App() {
     }
   };
 
-  const handleUntickTask = async (taskId: string | number) => {
+  const handleUntickTask = async (taskId: number) => {
     if (isShiftEnded && !isAdmin) {
       showToast("Shift has ended. Only admins can edit.", "error");
       return;
@@ -195,23 +386,15 @@ export default function App() {
     }
   };
 
-  const handleLogTemperature = async (type: string, location: string, temperature: number, staffId: string | number) => {
+  const handleLogTemperature = async (type: string, location: string, temperature: number, staffId: number) => {
     if (isShiftEnded && !isAdmin) {
       showToast("Shift has ended. Only admins can edit.", "error");
       return;
     }
-    const staff = staffList.find(s => s.id === staffId);
-
     const res = await apiFetch('/api/temperature-logs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        type, 
-        location, 
-        temperature, 
-        staffId,
-        staffName: staff?.name
-      })
+      body: JSON.stringify({ type, location, temperature, staffId })
     });
     if (res.ok) {
       fetchTempLogs(selectedDate);
@@ -219,7 +402,7 @@ export default function App() {
     }
   };
 
-  const handleDeleteLog = async (id: string | number) => {
+  const handleDeleteLog = async (id: number) => {
     const res = await apiFetch(`/api/logs/${id}`, {
       method: 'DELETE'
     });
@@ -230,7 +413,7 @@ export default function App() {
     }
   };
 
-  const handleDeleteTempLog = async (id: string | number) => {
+  const handleDeleteTempLog = async (id: number) => {
     const res = await apiFetch(`/api/temperature-logs/${id}`, {
       method: 'DELETE'
     });
@@ -248,37 +431,59 @@ export default function App() {
     }
   };
 
-  const handleEndShift = async (closedBy?: string) => {
-    if (isEndingShift) {
-      return;
-    }
-
-    const newStatus = !isShiftEnded;
-
-    if (newStatus && !closedBy) {
-      setShowShiftCloserModal(true);
-      return;
-    }
-
-    setIsEndingShift(true);
+  const handleExportExcel = async () => {
     try {
-      const res = await apiFetch('/api/end-shift', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ended: newStatus, closedBy })
-      });
+      showToast("Preparing export...");
+      const [logsRes, tempLogsRes] = await Promise.all([
+        apiFetch(`/api/logs?startDate=${exportRange.start}&endDate=${exportRange.end}`),
+        apiFetch(`/api/temperature-logs?startDate=${exportRange.start}&endDate=${exportRange.end}`)
+      ]);
 
-      if (res.ok) {
-        setIsShiftEnded(newStatus);
-        setShowShiftCloserModal(false);
-        showToast(newStatus ? `Shift ended by ${closedBy}. Telegram sent.` : "Shift reopened");
-        return;
-      }
+      const logsData = await logsRes.json();
+      const tempLogsData = await tempLogsRes.json();
 
-      const data = await res.json();
-      showToast(data.error || 'Failed to update shift status', 'error');
-    } finally {
-      setIsEndingShift(false);
+      const wb = XLSX.utils.book_new();
+
+      // Checklist Sheet
+      const checklistRows = logsData.map((l: any) => ({
+        Date: l.date,
+        Time: l.timestamp,
+        Task: l.taskName,
+        Staff: l.staffName
+      }));
+      const wsChecklist = XLSX.utils.json_to_sheet(checklistRows);
+      XLSX.utils.book_append_sheet(wb, wsChecklist, "Checklist Logs");
+
+      // Temperature Sheet
+      const tempRows = tempLogsData.map((l: any) => ({
+        Date: l.date,
+        Time: l.timestamp,
+        Type: l.type,
+        Location: l.location,
+        Temperature: l.temperature,
+        Staff: l.staffName
+      }));
+      const wsTemp = XLSX.utils.json_to_sheet(tempRows);
+      XLSX.utils.book_append_sheet(wb, wsTemp, "Temperature Logs");
+
+      XLSX.writeFile(wb, `FOH_Logs_${exportRange.start}_to_${exportRange.end}.xlsx`);
+      showToast("Export downloaded");
+    } catch (error) {
+      console.error(error);
+      showToast("Export failed", "error");
+    }
+  };
+
+  const handleEndShift = async () => {
+    const newStatus = !isShiftEnded;
+    const res = await apiFetch('/api/end-shift', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ended: newStatus })
+    });
+    if (res.ok) {
+      setIsShiftEnded(newStatus);
+      showToast(newStatus ? "Shift ended. Telegram sent." : "Shift reopened");
     }
   };
 
@@ -290,6 +495,9 @@ export default function App() {
     });
     if (res.ok) {
       setSelectedTimezone(tz);
+      const today = getTodayInTimezone(tz);
+      setSelectedDate(today);
+      setExportRange({ start: today, end: today });
       showToast("Timezone updated");
     }
   };
@@ -329,53 +537,41 @@ export default function App() {
     }
   };
 
-  if (dataLoading) {
-    return (
-      <div className="min-h-screen bg-stone-50 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
-          <p className="text-stone-400 font-bold text-sm animate-pulse">Loading your checklist...</p>
-        </div>
-      </div>
-    );
-  }
-
-  const shiftCloserOptions: string[] = Array.from(
-    new Set(staffList.map((staff) => staff.name).filter((name) => name.trim().length > 0)),
-  );
-
   return (
-    <div className="min-h-screen bg-stone-50 pb-24 flex flex-col">
+    <div className="min-h-screen bg-stone-50 pb-24 flex flex-col overflow-x-hidden">
+      {/* Pull to Refresh Indicator */}
+      <motion.div 
+        style={{ 
+          height: pullDistance,
+          opacity: pullOpacity,
+        }}
+        className="flex items-center justify-center bg-stone-100 overflow-hidden"
+      >
+        <motion.div style={{ rotate: pullRotation }}>
+          <RefreshCcw className={`w-6 h-6 text-emerald-600 ${isRefreshing ? 'animate-spin' : ''}`} />
+        </motion.div>
+      </motion.div>
+
       {/* Header */}
       <header className="bg-white border-b border-stone-200 px-6 py-4 sticky top-0 z-10 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <button 
             onClick={() => {
-              if (isEndingShift) {
-                return;
-              }
-
               if (isShiftEnded && !isAdmin) {
                 showToast("Shift has ended. Only admins can reopen.", "error");
                 return;
               }
-              if (isShiftEnded) {
-                triggerConfirm(
-                  'Reopen Shift',
-                  'Are you sure you want to reopen the shift?',
-                  () => handleEndShift()
-                );
-                return;
-              }
-
-              setShowShiftCloserModal(true);
+              triggerConfirm(
+                isShiftEnded ? 'Reopen Shift' : 'End Shift',
+                isShiftEnded ? 'Are you sure you want to reopen the shift?' : 'End shift and lock checklist? This will notify the team.',
+                handleEndShift
+              );
             }}
             className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all shadow-sm ${
               isShiftEnded 
                 ? 'bg-stone-800 text-white hover:bg-stone-900' 
                 : 'bg-red-600 text-white hover:bg-red-700 shadow-red-600/20'
             }`}
-            disabled={isEndingShift}
           >
             {isShiftEnded ? 'Reopen Shift' : 'End Shift'}
           </button>
@@ -407,7 +603,25 @@ export default function App() {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 p-6 max-w-2xl mx-auto w-full">
+      <main 
+        className="flex-1 p-6 max-w-2xl mx-auto w-full touch-pan-y"
+        onPointerMove={(e) => {
+          if (window.scrollY === 0 && e.buttons === 1) {
+            const movementY = e.movementY;
+            if (movementY > 0 || pullDistance.get() > 0) {
+              const newDist = Math.max(0, Math.min(100, pullDistance.get() + movementY * 0.5));
+              pullDistance.set(newDist);
+            }
+          }
+        }}
+        onPointerUp={() => {
+          if (pullDistance.get() >= 80 && !isRefreshing) {
+            refreshAll();
+          } else {
+            pullDistance.set(0);
+          }
+        }}
+      >
         <AnimatePresence mode="wait">
           {activeTab === 'checklist' && (
             <motion.div 
@@ -417,14 +631,14 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="space-y-8"
             >
-              {categories.map(cat => {
-                const catTasks = checklist.filter(t => t.category === cat.name);
-                if (catTasks.length === 0) return null;
+              {timeSlots.map(slot => {
+                const slotTasks = checklist.filter(t => t.timeSlot === slot.name);
+                if (slotTasks.length === 0) return null;
                 return (
-                  <section key={cat.id} className="space-y-4">
-                    <h2 className="text-xs font-black text-stone-400 uppercase tracking-[0.2em] px-1">{cat.name}</h2>
+                  <section key={slot.id} className="space-y-4">
+                    <h2 className="text-xs font-black text-stone-400 uppercase tracking-[0.2em] px-1">{slot.name}</h2>
                     <div className="space-y-3">
-                      {catTasks.map(task => (
+                      {slotTasks.map(task => (
                         <div 
                           key={task.id}
                           className={`flex items-center justify-between p-5 rounded-2xl border transition-all ${
@@ -437,7 +651,7 @@ export default function App() {
                             <p className={`font-bold text-lg ${task.completed ? 'text-emerald-800' : 'text-stone-800'}`}>
                               {task.name}
                             </p>
-                            <p className="text-xs text-stone-500 font-medium">{task.timeSlot}</p>
+                            <p className="text-xs text-stone-500 font-medium">{task.category}</p>
                           </div>
                           
                           <button
@@ -482,37 +696,36 @@ export default function App() {
                   onCancelEdit={() => setEditingTask(null)}
                 />
                 <div className="space-y-3">
-                  <h2 className="text-xs font-black text-stone-400 uppercase tracking-[0.2em] px-1">Active Tasks</h2>
-                  {tasks.map(task => (
-                    <div key={task.id} className="bg-white p-4 rounded-2xl border border-stone-200 flex items-center justify-between">
-                      <div>
-                        <p className="font-bold text-stone-800">{task.name}</p>
-                        <p className="text-xs text-stone-500">{task.category} • {task.timeSlot}</p>
+                  <h2 className="text-xs font-black text-stone-400 uppercase tracking-[0.2em] px-1">Active Tasks (Drag to Sort)</h2>
+                  <DndContext 
+                    sensors={sensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={handleDragEnd}
+                  >
+                    <SortableContext 
+                      items={tasks.map(t => t.id)}
+                      strategy={verticalListSortingStrategy}
+                    >
+                      <div className="space-y-3">
+                        {tasks.map(task => (
+                          <SortableTaskItem 
+                            key={task.id} 
+                            task={task} 
+                            onEdit={(t) => setEditingTask(t)}
+                            onDelete={(id) => triggerConfirm(
+                              'Delete Task',
+                              `Are you sure you want to delete this task?`,
+                              async () => {
+                                await apiFetch(`/api/tasks/${id}`, { method: 'DELETE' });
+                                fetchTasks();
+                                fetchChecklist();
+                              }
+                            )}
+                          />
+                        ))}
                       </div>
-                      <div className="flex gap-2">
-                        <button 
-                          onClick={() => setEditingTask(task)}
-                          className="p-2 text-stone-400 hover:text-emerald-500 transition-colors"
-                        >
-                          <ClipboardList className="w-5 h-5" />
-                        </button>
-                        <button 
-                          onClick={() => triggerConfirm(
-                            'Delete Task',
-                            `Are you sure you want to delete "${task.name}"?`,
-                            async () => {
-                              await apiFetch(`/api/tasks/${task.id}`, { method: 'DELETE' });
-                              fetchTasks();
-                              fetchChecklist();
-                            }
-                          )}
-                          className="p-2 text-stone-400 hover:text-red-500 transition-colors"
-                        >
-                          <Trash2 className="w-5 h-5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    </SortableContext>
+                  </DndContext>
                 </div>
               </motion.div>
             ) : <AdminLocked />
@@ -534,40 +747,64 @@ export default function App() {
                 />
               )}
               <div className="space-y-3">
-                <h2 className="text-xs font-black text-stone-400 uppercase tracking-[0.2em] px-1">FOH Team</h2>
-                {staffList.map(staff => (
-                  <div key={staff.id} className="bg-white p-4 rounded-2xl border border-stone-200 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 bg-stone-100 rounded-full flex items-center justify-center text-xs font-bold text-stone-500">
-                        {staff.name.charAt(0)}
+                <h2 className="text-xs font-black text-stone-400 uppercase tracking-[0.2em] px-1">FOH Team {isAdmin && "(Drag to Sort)"}</h2>
+                {isAdmin ? (
+                  <DndContext 
+                    sensors={sensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={async (event) => {
+                      const { active, over } = event;
+                      if (over && active.id !== over.id) {
+                        const oldIndex = staffList.findIndex((i) => i.id === active.id);
+                        const newIndex = staffList.findIndex((i) => i.id === over.id);
+                        const newStaff = arrayMove<Staff>(staffList, oldIndex, newIndex);
+                        setStaffList(newStaff);
+                        
+                        await apiFetch('/api/staff/reorder', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ staffIds: newStaff.map(s => s.id) })
+                        });
+                        fetchStaff();
+                      }
+                    }}
+                  >
+                    <SortableContext 
+                      items={staffList.map(s => s.id)}
+                      strategy={verticalListSortingStrategy}
+                    >
+                      <div className="space-y-3">
+                        {staffList.map(staff => (
+                          <SortableStaffItem 
+                            key={staff.id} 
+                            staff={staff} 
+                            isAdmin={isAdmin}
+                            onEdit={() => setEditingStaff(staff)}
+                            onDelete={() => triggerConfirm(
+                              'Remove Staff',
+                              `Are you sure you want to remove "${staff.name}"?`,
+                              async () => {
+                                await apiFetch(`/api/staff/${staff.id}`, { method: 'DELETE' });
+                                fetchStaff();
+                              }
+                            )}
+                          />
+                        ))}
                       </div>
-                      <p className="font-bold text-stone-800">{staff.name}</p>
+                    </SortableContext>
+                  </DndContext>
+                ) : (
+                  staffList.map(staff => (
+                    <div key={staff.id} className="bg-white p-4 rounded-2xl border border-stone-200 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 bg-stone-100 rounded-full flex items-center justify-center text-xs font-bold text-stone-500">
+                          {staff.name.charAt(0)}
+                        </div>
+                        <p className="font-bold text-stone-800">{staff.name}</p>
+                      </div>
                     </div>
-                    {isAdmin && (
-                      <div className="flex gap-2">
-                        <button 
-                          onClick={() => setEditingStaff(staff)}
-                          className="p-2 text-stone-400 hover:text-emerald-500 transition-colors"
-                        >
-                          <Users className="w-5 h-5" />
-                        </button>
-                        <button 
-                          onClick={() => triggerConfirm(
-                            'Remove Staff',
-                            `Are you sure you want to remove "${staff.name}"?`,
-                            async () => {
-                              await apiFetch(`/api/staff/${staff.id}`, { method: 'DELETE' });
-                              fetchStaff();
-                            }
-                          )}
-                          className="p-2 text-stone-400 hover:text-red-500 transition-colors"
-                        >
-                          <Trash2 className="w-5 h-5" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
             </motion.div>
           )}
@@ -610,6 +847,38 @@ export default function App() {
                   </button>
                 </div>
               </div>
+
+              {isAdmin && (
+                <div className="bg-white p-4 rounded-2xl border border-stone-200 shadow-sm space-y-4">
+                  <h2 className="text-xs font-black text-stone-400 uppercase tracking-[0.2em]">Export Data (Excel)</h2>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[10px] font-bold text-stone-400 uppercase mb-1">Start Date</label>
+                      <input 
+                        type="date" 
+                        value={exportRange.start}
+                        onChange={(e) => setExportRange(prev => ({ ...prev, start: e.target.value }))}
+                        className="w-full p-2 bg-stone-50 border border-stone-200 rounded-lg text-xs font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-stone-400 uppercase mb-1">End Date</label>
+                      <input 
+                        type="date" 
+                        value={exportRange.end}
+                        onChange={(e) => setExportRange(prev => ({ ...prev, end: e.target.value }))}
+                        className="w-full p-2 bg-stone-50 border border-stone-200 rounded-lg text-xs font-bold"
+                      />
+                    </div>
+                  </div>
+                  <button 
+                    onClick={handleExportExcel}
+                    className="w-full bg-stone-800 text-white font-bold p-3 rounded-xl text-xs uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-stone-900 transition-colors"
+                  >
+                    <Download className="w-4 h-4" /> Download Excel Report
+                  </button>
+                </div>
+              )}
               
               <div className="space-y-3">
                 <h2 className="text-xs font-black text-stone-400 uppercase tracking-[0.2em] px-1">
@@ -766,6 +1035,18 @@ export default function App() {
                 <SettingsList 
                   title="Categories" 
                   items={categories} 
+                  allowReorder={true}
+                  onReorder={async (categoryIds) => {
+                    const res = await apiFetch('/api/categories/reorder', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ categoryIds })
+                    });
+                    if (res.ok) {
+                      fetchCategories();
+                      fetchChecklist();
+                    }
+                  }}
                   onAdd={async (name) => {
                     await apiFetch('/api/categories', {
                       method: 'POST',
@@ -798,6 +1079,18 @@ export default function App() {
                 <SettingsList 
                   title="Time Slots" 
                   items={timeSlots} 
+                  allowReorder={true}
+                  onReorder={async (timeSlotIds) => {
+                    const res = await apiFetch('/api/time-slots/reorder', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ timeSlotIds })
+                    });
+                    if (res.ok) {
+                      fetchTimeSlots();
+                      fetchChecklist();
+                    }
+                  }}
                   onAdd={async (name) => {
                     await apiFetch('/api/time-slots', {
                       method: 'POST',
@@ -919,13 +1212,15 @@ export default function App() {
       </main>
 
       {/* Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-stone-200 px-2 py-3 flex items-center justify-around z-10 safe-area-bottom">
-        <NavButton active={activeTab === 'checklist'} icon={<CheckCircle2 />} label="Checklist" onClick={() => setActiveTab('checklist')} />
-        <NavButton active={activeTab === 'temperatures'} icon={<Thermometer />} label="Temps" onClick={() => setActiveTab('temperatures')} />
-        <NavButton active={activeTab === 'edit-tasks'} icon={<ClipboardList />} label="Tasks" onClick={() => setActiveTab('edit-tasks')} />
-        <NavButton active={activeTab === 'staff'} icon={<Users />} label="Staff" onClick={() => setActiveTab('staff')} />
-        <NavButton active={activeTab === 'logs'} icon={<History />} label="Logs" onClick={() => setActiveTab('logs')} />
-        <NavButton active={activeTab === 'settings'} icon={<SettingsIcon />} label="Settings" onClick={() => setActiveTab('settings')} />
+      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-stone-200 z-10 safe-area-bottom overflow-x-auto no-scrollbar">
+        <div className="flex items-center justify-between min-w-max px-4 py-3 gap-2 mx-auto">
+          <NavButton active={activeTab === 'checklist'} icon={<CheckCircle2 />} label="Checklist" onClick={() => setActiveTab('checklist')} />
+          <NavButton active={activeTab === 'temperatures'} icon={<Thermometer />} label="Temps" onClick={() => setActiveTab('temperatures')} />
+          <NavButton active={activeTab === 'edit-tasks'} icon={<ClipboardList />} label="Tasks" onClick={() => setActiveTab('edit-tasks')} />
+          <NavButton active={activeTab === 'staff'} icon={<Users />} label="Staff" onClick={() => setActiveTab('staff')} />
+          <NavButton active={activeTab === 'logs'} icon={<History />} label="Logs" onClick={() => setActiveTab('logs')} />
+          <NavButton active={activeTab === 'settings'} icon={<SettingsIcon />} label="Settings" onClick={() => setActiveTab('settings')} />
+        </div>
       </nav>
 
       {/* Staff Selection Modal for Checklist */}
@@ -959,46 +1254,6 @@ export default function App() {
             <button 
               onClick={() => setSelectingStaffForTask(null)}
               className="mt-6 w-full p-4 bg-stone-100 text-stone-600 font-bold rounded-2xl"
-            >
-              Cancel
-            </button>
-          </motion.div>
-        </div>
-      )}
-
-      {/* End Shift Closer Modal */}
-      {showShiftCloserModal && (
-        <div className="fixed inset-0 bg-stone-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-6">
-          <motion.div
-            initial={{ scale: 0.9, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            className="bg-white w-full max-w-md rounded-3xl p-8 shadow-2xl"
-          >
-            <div className="flex flex-col items-center mb-6">
-              <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mb-3">
-                <Lock className="text-red-600 w-6 h-6" />
-              </div>
-              <h3 className="text-xl font-bold text-stone-900">Who is closing this session?</h3>
-              <p className="text-stone-500 text-sm">Select one name to end shift</p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              {(shiftCloserOptions.length > 0 ? shiftCloserOptions : ['Unknown']).map((closer: string) => (
-                <button
-                  key={closer}
-                  onClick={() => handleEndShift(closer)}
-                  className="p-4 bg-stone-50 hover:bg-red-50 border border-stone-200 hover:border-red-200 rounded-2xl font-bold text-stone-700 transition-all disabled:opacity-50"
-                  disabled={isEndingShift}
-                >
-                  {closer}
-                </button>
-              ))}
-            </div>
-
-            <button
-              onClick={() => setShowShiftCloserModal(false)}
-              className="mt-6 w-full p-4 bg-stone-100 text-stone-600 font-bold rounded-2xl disabled:opacity-50"
-              disabled={isEndingShift}
             >
               Cancel
             </button>
@@ -1106,11 +1361,11 @@ export default function App() {
   );
 }
 
-function TemperatureForm({ staffList, onLogged }: { staffList: Staff[], onLogged: (type: string, location: string, temperature: number, staffId: string | number) => void }) {
+function TemperatureForm({ staffList, onLogged }: { staffList: Staff[], onLogged: (type: string, location: string, temperature: number, staffId: number) => void }) {
   const [type, setType] = useState<'Chiller' | 'Freezer'>('Chiller');
   const [location, setLocation] = useState("");
   const [temperature, setTemperature] = useState("");
-  const [staffId, setStaffId] = useState<string | number>(staffList[0]?.id || 0);
+  const [staffId, setStaffId] = useState(staffList[0]?.id || 0);
 
   useEffect(() => {
     if (staffList.length > 0 && !staffId) {
@@ -1163,11 +1418,16 @@ function TemperatureForm({ staffList, onLogged }: { staffList: Staff[], onLogged
         <div className="grid grid-cols-2 gap-3">
           <div className="relative">
             <input 
-              type="number"
-              step="0.1"
+              type="text"
+              inputMode="text"
               placeholder="Temp..."
               value={temperature}
-              onChange={(e) => setTemperature(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === '' || val === '-' || /^-?\d*\.?\d*$/.test(val)) {
+                  setTemperature(val);
+                }
+              }}
               className="w-full p-4 bg-stone-50 border border-stone-200 rounded-2xl font-bold text-stone-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
             />
             <span className="absolute right-4 top-1/2 -translate-y-1/2 font-bold text-stone-400">°C</span>
@@ -1175,7 +1435,7 @@ function TemperatureForm({ staffList, onLogged }: { staffList: Staff[], onLogged
           
           <select 
             value={staffId} 
-            onChange={(e) => setStaffId(e.target.value)}
+            onChange={(e) => setStaffId(parseInt(e.target.value))}
             className="p-4 bg-stone-50 border border-stone-200 rounded-2xl font-bold text-stone-800 focus:outline-none"
           >
             <option value={0} disabled>Select Staff</option>
@@ -1363,10 +1623,135 @@ function AddStaffForm({ onAdded, editingStaff, onCancelEdit }: { onAdded: () => 
   );
 }
 
-function SettingsList({ title, items, onAdd, onUpdate, onDelete }: { title: string, items: { id: string | number, name: string }[], onAdd: (name: string) => void, onUpdate: (id: string | number, name: string) => void, onDelete: (id: string | number) => void }) {
+const SortableSettingsItem: React.FC<{ 
+  item: { id: number; name: string }; 
+  editingId: number | null;
+  editName: string;
+  setEditName: (name: string) => void;
+  onUpdate: (id: number, name: string) => void;
+  onCancel: () => void;
+  onStartEdit: (item: { id: number; name: string }) => void;
+  onDelete: (id: number) => void;
+  allowReorder?: boolean;
+}> = ({ 
+  item, 
+  editingId, 
+  editName, 
+  setEditName, 
+  onUpdate, 
+  onCancel, 
+  onStartEdit, 
+  onDelete,
+  allowReorder
+}) => {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging
+  } = useSortable({ id: item.id, disabled: !allowReorder });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 10 : 1,
+    opacity: isDragging ? 0.5 : 1
+  };
+
+  return (
+    <div 
+      ref={setNodeRef} 
+      style={style}
+      className="flex items-center justify-between p-3 bg-stone-50 rounded-xl border border-stone-100"
+    >
+      {editingId === item.id ? (
+        <div className="flex gap-2 flex-1 mr-2">
+          <input 
+            type="text"
+            value={editName}
+            onChange={(e) => setEditName(e.target.value)}
+            className="flex-1 p-1 bg-white border border-stone-200 rounded-lg font-bold text-stone-800 focus:outline-none"
+            autoFocus
+          />
+          <button 
+            onClick={() => { onUpdate(item.id, editName); onCancel(); }}
+            className="text-emerald-600 font-bold text-xs"
+          >
+            Save
+          </button>
+          <button 
+            onClick={onCancel}
+            className="text-stone-400 font-bold text-xs"
+          >
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="flex items-center gap-3">
+            {allowReorder && (
+              <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing p-1 text-stone-400 hover:text-stone-600">
+                <GripVertical className="w-4 h-4" />
+              </div>
+            )}
+            <span className="font-bold text-stone-700">{item.name}</span>
+          </div>
+          <div className="flex gap-3">
+            <button 
+              onClick={() => onStartEdit(item)}
+              className="text-stone-400 hover:text-emerald-500"
+            >
+              <ClipboardList className="w-4 h-4" />
+            </button>
+            <button onClick={() => onDelete(item.id)} className="text-stone-400 hover:text-red-500">
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function SettingsList({ 
+  title, 
+  items, 
+  onAdd, 
+  onUpdate, 
+  onDelete, 
+  onReorder,
+  allowReorder 
+}: { 
+  title: string, 
+  items: { id: number, name: string }[], 
+  onAdd: (name: string) => void, 
+  onUpdate: (id: number, name: string) => void, 
+  onDelete: (id: number) => void,
+  onReorder?: (ids: number[]) => void,
+  allowReorder?: boolean
+}) {
   const [name, setName] = useState("");
-  const [editingId, setEditingId] = useState<string | number | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [editName, setEditName] = useState("");
+
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (onReorder && over && active.id !== over.id) {
+      const oldIndex = items.findIndex((i) => i.id === active.id);
+      const newIndex = items.findIndex((i) => i.id === over.id);
+      const newItems = arrayMove(items, oldIndex, newIndex);
+      onReorder(newItems.map(i => i.id));
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -1388,48 +1773,33 @@ function SettingsList({ title, items, onAdd, onUpdate, onDelete }: { title: stri
           </button>
         </div>
         <div className="space-y-2">
-          {items.map(item => (
-            <div key={item.id} className="flex items-center justify-between p-3 bg-stone-50 rounded-xl border border-stone-100">
-              {editingId === item.id ? (
-                <div className="flex gap-2 flex-1 mr-2">
-                  <input 
-                    type="text"
-                    value={editName}
-                    onChange={(e) => setEditName(e.target.value)}
-                    className="flex-1 p-1 bg-white border border-stone-200 rounded-lg font-bold text-stone-800 focus:outline-none"
-                    autoFocus
+          <DndContext 
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
+          >
+            <SortableContext 
+              items={items.map(i => i.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              <div className="space-y-2">
+                {items.map(item => (
+                  <SortableSettingsItem 
+                    key={item.id}
+                    item={item}
+                    editingId={editingId}
+                    editName={editName}
+                    setEditName={setEditName}
+                    onUpdate={onUpdate}
+                    onCancel={() => setEditingId(null)}
+                    onStartEdit={(i) => { setEditingId(i.id); setEditName(i.name); }}
+                    onDelete={onDelete}
+                    allowReorder={allowReorder}
                   />
-                  <button 
-                    onClick={() => { onUpdate(item.id, editName); setEditingId(null); }}
-                    className="text-emerald-600 font-bold text-xs"
-                  >
-                    Save
-                  </button>
-                  <button 
-                    onClick={() => setEditingId(null)}
-                    className="text-stone-400 font-bold text-xs"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <span className="font-bold text-stone-700">{item.name}</span>
-                  <div className="flex gap-3">
-                    <button 
-                      onClick={() => { setEditingId(item.id); setEditName(item.name); }}
-                      className="text-stone-400 hover:text-emerald-500"
-                    >
-                      <ClipboardList className="w-4 h-4" />
-                    </button>
-                    <button onClick={() => onDelete(item.id)} className="text-stone-400 hover:text-red-500">
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          ))}
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
         </div>
       </div>
     </div>
