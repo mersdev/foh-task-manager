@@ -128,9 +128,28 @@ async function getLocalTime() {
   const parts = formatter.formatToParts(now);
   const getPart = (type: string) => parts.find((part) => part.type === type)?.value;
 
+  const year = Number(getPart('year'));
+  const month = Number(getPart('month'));
+  const day = Number(getPart('day'));
+  const hour = Number(getPart('hour'));
+  const minute = Number(getPart('minute'));
+  const second = getPart('second');
+
+  const resetHour = 7;
+  const resetMinute = 30;
+
+  const businessDate = new Date(Date.UTC(year, month - 1, day));
+  if (hour < resetHour || (hour === resetHour && minute < resetMinute)) {
+    businessDate.setUTCDate(businessDate.getUTCDate() - 1);
+  }
+
+  const businessYear = businessDate.getUTCFullYear();
+  const businessMonth = String(businessDate.getUTCMonth() + 1).padStart(2, '0');
+  const businessDay = String(businessDate.getUTCDate()).padStart(2, '0');
+
   return {
-    date: `${getPart('year')}-${getPart('month')}-${getPart('day')}`,
-    time: `${getPart('hour')}:${getPart('minute')}:${getPart('second')}`,
+    date: `${businessYear}-${businessMonth}-${businessDay}`,
+    time: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${second}`,
   };
 }
 
@@ -170,6 +189,50 @@ async function sendTelegramShiftEndMessage(closedBy: string, date: string, time:
     const body = await response.text();
     throw new Error(`Telegram API error (${response.status}): ${body}`);
   }
+}
+
+async function resolveTaskAndStaffNames(taskId: string | number, staffId: string | number) {
+  const [task, staff] = await Promise.all([
+    queryOne<{ name?: string | null }>(
+      supabase.from('tasks').select('name').eq('id', taskId).limit(1).maybeSingle(),
+      'resolve task name',
+    ),
+    queryOne<{ name?: string | null }>(
+      supabase.from('staff').select('name').eq('id', staffId).limit(1).maybeSingle(),
+      'resolve staff name',
+    ),
+  ]);
+
+  return {
+    taskName: task?.name || `Task #${taskId}`,
+    staffName: staff?.name || `Staff #${staffId}`,
+  };
+}
+
+async function resolveStaffName(staffId: string | number) {
+  const staff = await queryOne<{ name?: string | null }>(
+    supabase.from('staff').select('name').eq('id', staffId).limit(1).maybeSingle(),
+    'resolve staff name',
+  );
+  return staff?.name || `Staff #${staffId}`;
+}
+
+function formatChecklistSummary(logs: EntityRow[]) {
+  if (logs.length === 0) {
+    return 'No checklist items were completed.';
+  }
+
+  const lines = logs.slice(0, 20).map((log) => {
+    const taskName = String(log.taskName || `Task #${String(log.taskId || '')}`);
+    const staffName = String(log.staffName || `Staff #${String(log.staffId || '')}`);
+    return `- ${taskName} (${staffName})`;
+  });
+
+  if (logs.length > 20) {
+    lines.push(`- ...and ${logs.length - 20} more`);
+  }
+
+  return lines.join('\n');
 }
 
 export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
@@ -225,7 +288,31 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
 
       if (ended) {
         const { date, time } = await getLocalTime();
-        await sendTelegramShiftEndMessage(closedBy || 'Unknown', date, time);
+        const dailyLogs = await queryMany<EntityRow>(
+          supabase.from('logs').select('*').eq('date', date).order('timestamp', { ascending: true }),
+          'telegram shift summary logs',
+        );
+        const summary = formatChecklistSummary(dailyLogs);
+
+        await sendTelegramShiftEndMessage(
+          closedBy || 'Unknown',
+          date,
+          time,
+        );
+        if (TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
+          const detailsResponse = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: TELEGRAM_CHAT_ID,
+              text: `Completed checklist summary for ${date}:\n${summary}`,
+            }),
+          });
+          if (!detailsResponse.ok) {
+            const detailsBody = await detailsResponse.text();
+            throw new Error(`Telegram API error (${detailsResponse.status}): ${detailsBody}`);
+          }
+        }
         await setSetting('shift_ended', 'true');
         await setSetting('shift_closed_by', closedBy || 'Unknown');
         await setSetting('shift_closed_at', `${date} ${time}`);
@@ -444,7 +531,8 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
 
     if (path === '/api/temperature-logs' && method === 'POST') {
       const { date, time: timestamp } = await getLocalTime();
-      const { type, location, temperature, staffId, staffName } = body;
+      const { type, location, temperature, staffId } = body;
+      const staffName = await resolveStaffName(String(staffId));
       const log = await queryOne<EntityRow>(
         supabase
           .from('temperature_logs')
@@ -468,7 +556,7 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
 
     if (path === '/api/logs' && method === 'POST') {
       const { date, time: timestamp } = await getLocalTime();
-      const { taskId, staffId, taskName, staffName } = body;
+      const { taskId, staffId } = body;
       const existing = await queryOne<{ id: string | number }>(
         supabase.from('logs').select('id').eq('taskId', taskId).eq('date', date).limit(1).maybeSingle(),
         'check existing log',
@@ -477,6 +565,8 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
       if (existing) {
         return jsonResponse({ error: 'Task already completed today' }, 400);
       }
+
+      const { taskName, staffName } = await resolveTaskAndStaffNames(String(taskId), String(staffId));
 
       const log = await queryOne<EntityRow>(
         supabase.from('logs').insert({ date, taskId, staffId, taskName, staffName, timestamp }).select('*').single(),
