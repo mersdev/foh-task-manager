@@ -2,13 +2,99 @@
 <img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 </div>
 
-# FOH Task Manager (Frontend Only)
+# FOH Task Manager
 
-This app is a React + TypeScript frontend served by Vite. It talks directly to Supabase from the browser.
+This app is a React + TypeScript frontend served by Vite. It uses Supabase directly from the browser via `src/service/client.ts` and `src/service/apiClient.ts`.
 
-Supabase runtime code is organized under `src/service/`:
-- `client.ts`: Browser Supabase client
-- `apiClient.ts`: Frontend API shim used by `App.tsx`
+## Functions In The App
+
+### Core Operations
+- Daily FOH checklist by time slot (`Checklist` tab)
+- Tick task completion with staff attribution
+- Untick completed task
+- Temperature logging (`Temps` tab) for Chiller/Freezer with:
+  - location
+  - temperature value
+  - staff attribution
+- View today’s temperature readings
+
+### Logs & History
+- `Logs` tab with date filter
+- Toggle between:
+  - Completed task logs
+  - Temperature records
+- Admin can delete checklist log records
+- Admin can delete temperature log records
+- Export logs to Excel (`.xlsx`) for selected date range
+
+### Admin & Settings
+- PIN-protected admin mode
+- Change admin PIN
+- End Shift / Reopen Shift
+- Shift lock behavior:
+  - Non-admin cannot modify checklist/temperature after shift ended
+  - Admin can still manage records
+- Manage Categories:
+  - add
+  - rename
+  - delete
+  - drag-and-drop reorder
+- Manage Time Slots:
+  - add
+  - rename
+  - delete
+  - drag-and-drop reorder
+- Manage Tasks:
+  - add
+  - edit
+  - soft delete (inactive)
+  - drag-and-drop reorder
+- Manage Staff:
+  - add
+  - edit
+  - soft delete (inactive)
+  - drag-and-drop reorder
+- Regional timezone setting
+
+### Telegram Communication
+- Telegram-only notification channel (no email notifications)
+- On `End Shift`, sends Telegram message with:
+  - shift ended date/time
+  - closed by user
+  - checklist lock status
+- Sends checklist completion summary to Telegram:
+  - completed task name
+  - completed by staff name
+
+### Data Integrity & Time Rules
+- Checklist/task/temperature operations use timezone-aware local time
+- Business-day boundary at `07:30` for checklist/log date handling
+- Auto-refresh is scheduled daily at `07:30` in app runtime
+- Missing `taskName` / `staffName` are resolved from DB on new log writes
+- UI has fallback display for legacy rows with missing names (`Task #id`, `Staff #id`)
+
+### API Routes Implemented (via `apiClient.ts`)
+- `/api/admin-pin`
+- `/api/settings`
+- `/api/shift-status`
+- `/api/end-shift`
+- `/api/categories` + reorder + update + delete
+- `/api/time-slots` + reorder + update + delete
+- `/api/staff` + reorder + update + deactivate
+- `/api/tasks` + reorder + update + deactivate
+- `/api/logs` + date/range query + create + delete
+- `/api/logs/task/:id` (untick by task for current business date)
+- `/api/temperature-logs` + date/range query + create + delete
+- `/api/checklist`
+- `/api/bootstrap`
+
+### Test Coverage (Cypress, Individual Files)
+- `cypress/e2e/checklist.cy.ts`
+- `cypress/e2e/logs.cy.ts`
+- `cypress/e2e/settings.telegram.cy.ts`
+- `cypress/e2e/staff.cy.ts`
+- `cypress/e2e/tasks.cy.ts`
+- `cypress/e2e/temperatures.cy.ts`
 
 ## Run Locally
 
@@ -20,13 +106,14 @@ Supabase runtime code is organized under `src/service/`:
    - `VITE_SUPABASE_ANON_KEY`
    - `VITE_TELEGRAM_BOT_TOKEN`
    - `VITE_TELEGRAM_CHAT_ID`
-3. Run the app:
+3. Run:
    `npm run dev`
 
-## Reset DB To Fresh State
+## Utility Scripts
 
-Use this when you want to clear dirty data and reseed defaults.
-
-1. Set `SUPABASE_SERVICE_ROLE_KEY` in your shell or `.env`
-2. Run:
-   `npm run db:reset`
+- Reset DB to fresh seed:
+  `npm run db:reset`
+- One-time backfill for old blank log names:
+  `npm run db:backfill-log-names`
+- Run end-to-end tests:
+  `npm run test:e2e`

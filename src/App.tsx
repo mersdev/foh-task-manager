@@ -281,6 +281,32 @@ export default function App() {
     fetchShiftStatus();
   }, []);
 
+  useEffect(() => {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const scheduleNextChecklistRefresh = () => {
+      const now = new Date();
+      const next = new Date(now);
+      next.setHours(7, 30, 0, 0);
+      if (next <= now) {
+        next.setDate(next.getDate() + 1);
+      }
+
+      timeoutId = setTimeout(async () => {
+        await refreshAll();
+        scheduleNextChecklistRefresh();
+      }, next.getTime() - now.getTime());
+    };
+
+    scheduleNextChecklistRefresh();
+
+    return () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+  }, [selectedDate]);
+
   const fetchSettings = async () => {
     const res = await apiFetch('/api/settings');
     const data = await res.json();
@@ -895,8 +921,8 @@ export default function App() {
                     logs.map(log => (
                       <div key={log.id} className="bg-white p-4 rounded-2xl border border-stone-200 flex items-center justify-between">
                         <div>
-                          <p className="font-bold text-stone-800">{log.taskName}</p>
-                          <p className="text-xs text-stone-500">Completed by <span className="font-bold text-emerald-600">{log.staffName}</span></p>
+                          <p className="font-bold text-stone-800">{log.taskName || `Task #${log.taskId}`}</p>
+                          <p className="text-xs text-stone-500">Completed by <span className="font-bold text-emerald-600">{log.staffName || `Staff #${log.staffId}`}</span></p>
                         </div>
                         <div className="flex items-center gap-4">
                           <div className="text-right">
@@ -936,7 +962,7 @@ export default function App() {
                             </span>
                             <p className="font-bold text-stone-800">{log.location}</p>
                           </div>
-                          <p className="text-xs text-stone-500 mt-1">Logged by <span className="font-bold text-emerald-600">{log.staffName}</span></p>
+                          <p className="text-xs text-stone-500 mt-1">Logged by <span className="font-bold text-emerald-600">{log.staffName || `Staff #${log.staffId}`}</span></p>
                         </div>
                         <div className="flex items-center gap-4">
                           <div className="text-right">
@@ -996,7 +1022,7 @@ export default function App() {
                           </span>
                           <p className="font-bold text-stone-800">{log.location}</p>
                         </div>
-                        <p className="text-xs text-stone-500 mt-1">Logged by <span className="font-bold text-emerald-600">{log.staffName}</span></p>
+                        <p className="text-xs text-stone-500 mt-1">Logged by <span className="font-bold text-emerald-600">{log.staffName || `Staff #${log.staffId}`}</span></p>
                       </div>
                       <div className="flex items-center gap-4">
                         <div className="text-right">

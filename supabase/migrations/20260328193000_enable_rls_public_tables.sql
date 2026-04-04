@@ -9,8 +9,7 @@ begin
     'tasks',
     'logs',
     'temperature_logs',
-    'app_settings',
-    'notification_emails'
+    'app_settings'
   ] loop
     if to_regclass('public.' || tbl) is not null then
       execute format('alter table public.%I enable row level security', tbl);
