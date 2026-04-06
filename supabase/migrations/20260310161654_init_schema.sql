@@ -75,17 +75,45 @@ alter table public.logs enable row level security;
 alter table public.temperature_logs enable row level security;
 alter table public.app_settings enable row level security;
 
-create policy if not exists "allow_anon_all_categories" on public.categories for all to anon using (true) with check (true);
-create policy if not exists "allow_authenticated_all_categories" on public.categories for all to authenticated using (true) with check (true);
-create policy if not exists "allow_anon_all_time_slots" on public.time_slots for all to anon using (true) with check (true);
-create policy if not exists "allow_authenticated_all_time_slots" on public.time_slots for all to authenticated using (true) with check (true);
-create policy if not exists "allow_anon_all_staff" on public.staff for all to anon using (true) with check (true);
-create policy if not exists "allow_authenticated_all_staff" on public.staff for all to authenticated using (true) with check (true);
-create policy if not exists "allow_anon_all_tasks" on public.tasks for all to anon using (true) with check (true);
-create policy if not exists "allow_authenticated_all_tasks" on public.tasks for all to authenticated using (true) with check (true);
-create policy if not exists "allow_anon_all_logs" on public.logs for all to anon using (true) with check (true);
-create policy if not exists "allow_authenticated_all_logs" on public.logs for all to authenticated using (true) with check (true);
-create policy if not exists "allow_anon_all_temperature_logs" on public.temperature_logs for all to anon using (true) with check (true);
-create policy if not exists "allow_authenticated_all_temperature_logs" on public.temperature_logs for all to authenticated using (true) with check (true);
-create policy if not exists "allow_anon_all_app_settings" on public.app_settings for all to anon using (true) with check (true);
-create policy if not exists "allow_authenticated_all_app_settings" on public.app_settings for all to authenticated using (true) with check (true);
+do $$
+declare
+  tbl text;
+begin
+  foreach tbl in array array[
+    'categories',
+    'time_slots',
+    'staff',
+    'tasks',
+    'logs',
+    'temperature_logs',
+    'app_settings'
+  ] loop
+    if not exists (
+      select 1
+      from pg_policies
+      where schemaname = 'public'
+        and tablename = tbl
+        and policyname = 'allow_anon_all_' || tbl
+    ) then
+      execute format(
+        'create policy %I on public.%I for all to anon using (true) with check (true)',
+        'allow_anon_all_' || tbl,
+        tbl
+      );
+    end if;
+
+    if not exists (
+      select 1
+      from pg_policies
+      where schemaname = 'public'
+        and tablename = tbl
+        and policyname = 'allow_authenticated_all_' || tbl
+    ) then
+      execute format(
+        'create policy %I on public.%I for all to authenticated using (true) with check (true)',
+        'allow_authenticated_all_' || tbl,
+        tbl
+      );
+    end if;
+  end loop;
+end $$;
