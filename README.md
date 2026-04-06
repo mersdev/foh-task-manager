@@ -4,7 +4,9 @@
 
 # FOH Task Manager
 
-This app is a React + TypeScript frontend served by Vite. It uses Supabase directly from the browser via `src/service/client.ts` and `src/service/apiClient.ts`.
+This app is a React + TypeScript frontend served by Vite.
+- Local mode uses Supabase project `foh-task-manager-local`.
+- Dev mode uses Supabase project `foh-task-manager-dev`.
 
 ## Functions In The App
 
@@ -103,17 +105,34 @@ This app is a React + TypeScript frontend served by Vite. It uses Supabase direc
 1. Install dependencies:
    `npm install`
 2. Set these in `.env` (or `.env.local`):
-   - `VITE_SUPABASE_ANON_KEY`
+   - `VITE_APP_ENV=local`
+   - `VITE_SUPABASE_URL_LOCAL`
+   - `VITE_SUPABASE_ANON_KEY_LOCAL`
    - `VITE_TELEGRAM_BOT_TOKEN`
    - `VITE_TELEGRAM_CHAT_ID`
 3. Run:
    `npm run dev`
 
+## Dev Environment (Supabase)
+
+Set `VITE_APP_ENV=dev` and configure:
+- `VITE_SUPABASE_URL_DEV`
+- `VITE_SUPABASE_ANON_KEY_DEV`
+
 ## Utility Scripts
 
-- Reset DB to fresh seed:
+- Sync latest schema from `foh-task-manager-dev` into migrations:
+  `npm run db:sync-dev-migrations`
+  - If DNS to `db.<project-ref>.supabase.co` fails in containerized tooling, set either:
+    - `SUPABASE_DB_URL_DEV` (percent-encoded Postgres URL), or
+    - `SUPABASE_DB_PASSWORD` (script builds URL from `supabase/.temp/pooler-url`).
+- Align `foh-task-manager-local` with migrations and reseed:
+  `npm run db:align-local`
+- Reset DB to fresh seed (`SUPABASE_TARGET=local` by default):
   `npm run db:reset`
 - One-time backfill for old blank log names:
   `npm run db:backfill-log-names`
+- For dev Supabase scripts, set:
+  `SUPABASE_TARGET=dev`
 - Run end-to-end tests:
   `npm run test:e2e`

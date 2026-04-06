@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   CheckCircle2, 
   ClipboardList, 
@@ -172,24 +172,78 @@ export default function App() {
   const [isShiftEnded, setIsShiftEnded] = useState(false);
   const [selectedTimezone, setSelectedTimezone] = useState("Asia/Kuala_Lumpur");
   
-  const getTodayInTimezone = (tz: string) => {
+  const getBusinessDateInTimezone = (tz: string) => {
     const now = new Date();
-    const formatter = new Intl.DateTimeFormat('en-CA', {
+    const formatter = new Intl.DateTimeFormat('en-GB', {
       timeZone: tz,
       year: 'numeric',
       month: '2-digit',
-      day: '2-digit'
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
     });
-    return formatter.format(now);
+    const parts = formatter.formatToParts(now);
+    const getPart = (type: string) => parts.find((part) => part.type === type)?.value ?? '00';
+
+    const year = Number(getPart('year'));
+    const month = Number(getPart('month'));
+    const day = Number(getPart('day'));
+    const hour = Number(getPart('hour'));
+    const minute = Number(getPart('minute'));
+
+    const businessDate = new Date(Date.UTC(year, month - 1, day));
+    if (hour < 7 || (hour === 7 && minute < 30)) {
+      businessDate.setUTCDate(businessDate.getUTCDate() - 1);
+    }
+
+    const businessYear = businessDate.getUTCFullYear();
+    const businessMonth = String(businessDate.getUTCMonth() + 1).padStart(2, '0');
+    const businessDay = String(businessDate.getUTCDate()).padStart(2, '0');
+    return `${businessYear}-${businessMonth}-${businessDay}`;
   };
 
-  const [selectedDate, setSelectedDate] = useState(getTodayInTimezone("Asia/Kuala_Lumpur"));
+  const [selectedDate, setSelectedDate] = useState(getBusinessDateInTimezone("Asia/Kuala_Lumpur"));
   const [exportRange, setExportRange] = useState({
-    start: getTodayInTimezone("Asia/Kuala_Lumpur"),
-    end: getTodayInTimezone("Asia/Kuala_Lumpur")
+    start: getBusinessDateInTimezone("Asia/Kuala_Lumpur"),
+    end: getBusinessDateInTimezone("Asia/Kuala_Lumpur")
   });
+  const todayBusinessDate = getBusinessDateInTimezone(selectedTimezone);
+  const allTimezones = useMemo(() => {
+    const tzSource = (Intl as unknown as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf;
+    const values = typeof tzSource === 'function' ? tzSource('timeZone') : [];
+    return Array.from(new Set(['UTC', selectedTimezone, ...values]));
+  }, [selectedTimezone]);
   const [checklist, setChecklist] = useState<(Task & { completed: number })[]>([]);
   const [logVariant, setLogVariant] = useState<'checklist' | 'temperatures'>('checklist');
+  const taskPlaceholderPattern = /^Task\s*#\d+$/i;
+  const staffPlaceholderPattern = /^Staff\s*#\d+$/i;
+  const taskNameById = useMemo(
+    () => new Map(tasks.map((task) => [String(task.id), task.name])),
+    [tasks]
+  );
+  const staffNameById = useMemo(
+    () => new Map(staffList.map((staff) => [String(staff.id), staff.name])),
+    [staffList]
+  );
+
+  const getDisplayTaskName = (taskName?: string, taskId?: string | number) => {
+    const normalized = String(taskName ?? '').trim();
+    const fallback = taskId !== undefined ? taskNameById.get(String(taskId)) : undefined;
+    if (!normalized || taskPlaceholderPattern.test(normalized)) {
+      return fallback || 'Unknown Task';
+    }
+    return normalized;
+  };
+
+  const getDisplayStaffName = (staffName?: string, staffId?: string | number) => {
+    const normalized = String(staffName ?? '').trim();
+    const fallback = staffId !== undefined ? staffNameById.get(String(staffId)) : undefined;
+    if (!normalized || staffPlaceholderPattern.test(normalized)) {
+      return fallback || 'Unknown Staff';
+    }
+    return normalized;
+  };
 
   // UI States
   const [confirmModal, setConfirmModal] = useState<{
@@ -249,6 +303,7 @@ export default function App() {
 
   // Selection states
   const [selectingStaffForTask, setSelectingStaffForTask] = useState<string | number | null>(null);
+  const [selectingStaffForShiftClose, setSelectingStaffForShiftClose] = useState(false);
   const [editingStaff, setEditingStaff] = useState<Staff | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
 
@@ -307,27 +362,54 @@ export default function App() {
     };
   }, [selectedDate]);
 
+  const readJsonSafe = async (res: Response) => {
+    try {
+      return await res.json();
+    } catch {
+      return null;
+    }
+  };
+
+  const readArrayResponse = async (res: Response, label: string) => {
+    const data = await readJsonSafe(res);
+    if (!res.ok) {
+      console.error(`[APP] ${label}:`, data);
+      return [] as any[];
+    }
+    return Array.isArray(data) ? data : [];
+  };
+
   const fetchSettings = async () => {
     const res = await apiFetch('/api/settings');
-    const data = await res.json();
-    if (data.timezone) {
+    const data = await readJsonSafe(res);
+    if (res.ok && data?.timezone) {
       setSelectedTimezone(data.timezone);
-      const today = getTodayInTimezone(data.timezone);
-      setSelectedDate(today);
-      setExportRange({ start: today, end: today });
+      const businessDate = getBusinessDateInTimezone(data.timezone);
+      setSelectedDate(businessDate);
+      setExportRange({ start: businessDate, end: businessDate });
+    } else if (!res.ok) {
+      console.error('[APP] fetch settings:', data);
     }
   };
 
   const fetchShiftStatus = async () => {
     const res = await apiFetch('/api/shift-status');
-    const data = await res.json();
-    setIsShiftEnded(data.ended);
+    const data = await readJsonSafe(res);
+    if (res.ok) {
+      setIsShiftEnded(Boolean(data?.ended));
+    } else {
+      console.error('[APP] fetch shift status:', data);
+    }
   };
 
   const fetchAdminPin = async () => {
     const res = await apiFetch('/api/admin-pin');
-    const data = await res.json();
-    setAdminPin(data.pin);
+    const data = await readJsonSafe(res);
+    if (res.ok && data?.pin) {
+      setAdminPin(data.pin);
+    } else if (!res.ok) {
+      console.error('[APP] fetch admin pin:', data);
+    }
   };
 
   useEffect(() => {
@@ -336,51 +418,72 @@ export default function App() {
       fetchTempLogs(selectedDate);
     }
     if (activeTab === 'temperatures') {
-      fetchTempLogs(selectedDate);
+      fetchTempLogs(todayBusinessDate);
     }
-  }, [activeTab, selectedDate]);
+  }, [activeTab, selectedDate, todayBusinessDate]);
 
   const fetchStaff = async () => {
     const res = await apiFetch('/api/staff');
-    const data = await res.json();
-    setStaffList(data);
+    setStaffList(await readArrayResponse(res, 'fetch staff'));
   };
 
   const fetchCategories = async () => {
     const res = await apiFetch('/api/categories');
-    const data = await res.json();
-    setCategories(data);
+    setCategories(await readArrayResponse(res, 'fetch categories'));
   };
 
   const fetchTimeSlots = async () => {
     const res = await apiFetch('/api/time-slots');
-    const data = await res.json();
-    setTimeSlots(data);
+    setTimeSlots(await readArrayResponse(res, 'fetch time slots'));
   };
 
   const fetchTasks = async () => {
     const res = await apiFetch('/api/tasks');
-    const data = await res.json();
-    setTasks(data);
+    setTasks(await readArrayResponse(res, 'fetch tasks'));
     fetchChecklist(); // Ensure checklist is updated when tasks change
   };
 
   const fetchChecklist = async () => {
     const res = await apiFetch('/api/checklist');
-    const data = await res.json();
-    setChecklist(data);
+    setChecklist(await readArrayResponse(res, 'fetch checklist') as (Task & { completed: number })[]);
+  };
+
+  const fetchAllStaffMap = async () => {
+    const res = await apiFetch('/api/staff/all');
+    const rows = await readArrayResponse(res, 'fetch all staff for logs') as Staff[];
+    return new Map(rows.map((staff) => [String(staff.id), staff.name]));
   };
 
   const fetchLogs = async (date: string) => {
-    const res = await apiFetch(`/api/logs?date=${date}`);
-    const data = await res.json();
-    setLogs(data);
+    const [logsRes, allStaffMap] = await Promise.all([
+      apiFetch(`/api/logs?date=${date}`),
+      fetchAllStaffMap(),
+    ]);
+    const rows = await readArrayResponse(logsRes, `fetch logs for ${date}`) as Log[];
+    const resolved = rows.map((log) => {
+      const mappedName = allStaffMap.get(String(log.staffId));
+      return {
+        ...log,
+        staffName: mappedName || log.staffName || 'Unknown Staff',
+      };
+    });
+    setLogs(resolved);
   };
 
   const fetchTempLogs = async (date: string) => {
-    const res = await apiFetch(`/api/temperature-logs?date=${date}`);
-    const data = await res.json();
-    setTempLogs(data);
+    const [logsRes, allStaffMap] = await Promise.all([
+      apiFetch(`/api/temperature-logs?date=${date}`),
+      fetchAllStaffMap(),
+    ]);
+    const rows = await readArrayResponse(logsRes, `fetch temperature logs for ${date}`) as TemperatureLog[];
+    const resolved = rows.map((log) => {
+      const mappedName = allStaffMap.get(String(log.staffId));
+      return {
+        ...log,
+        staffName: mappedName || log.staffName || 'Unknown Staff',
+      };
+    });
+    setTempLogs(resolved);
   };
 
   const handleCompleteTask = async (taskId: number, staffId: number) => {
@@ -394,8 +497,13 @@ export default function App() {
       body: JSON.stringify({ taskId, staffId })
     });
     if (res.ok) {
+      setSelectedDate(todayBusinessDate);
       setSelectingStaffForTask(null);
       fetchChecklist();
+      fetchLogs(todayBusinessDate);
+    } else {
+      const data = await res.json();
+      showToast(data.error || "Failed to save checklist log", "error");
     }
   };
 
@@ -423,8 +531,12 @@ export default function App() {
       body: JSON.stringify({ type, location, temperature, staffId })
     });
     if (res.ok) {
-      fetchTempLogs(selectedDate);
+      setSelectedDate(todayBusinessDate);
+      fetchTempLogs(todayBusinessDate);
       showToast("Temperature logged successfully");
+    } else {
+      const data = await res.json();
+      showToast(data.error || "Failed to log temperature", "error");
     }
   };
 
@@ -465,8 +577,8 @@ export default function App() {
         apiFetch(`/api/temperature-logs?startDate=${exportRange.start}&endDate=${exportRange.end}`)
       ]);
 
-      const logsData = await logsRes.json();
-      const tempLogsData = await tempLogsRes.json();
+      const logsData = await readArrayResponse(logsRes, 'export checklist logs');
+      const tempLogsData = await readArrayResponse(tempLogsRes, 'export temperature logs');
 
       const wb = XLSX.utils.book_new();
 
@@ -474,8 +586,8 @@ export default function App() {
       const checklistRows = logsData.map((l: any) => ({
         Date: l.date,
         Time: l.timestamp,
-        Task: l.taskName,
-        Staff: l.staffName
+        Task: getDisplayTaskName(l.taskName, l.taskId),
+        Staff: getDisplayStaffName(l.staffName, l.staffId)
       }));
       const wsChecklist = XLSX.utils.json_to_sheet(checklistRows);
       XLSX.utils.book_append_sheet(wb, wsChecklist, "Checklist Logs");
@@ -487,7 +599,7 @@ export default function App() {
         Type: l.type,
         Location: l.location,
         Temperature: l.temperature,
-        Staff: l.staffName
+        Staff: getDisplayStaffName(l.staffName, l.staffId)
       }));
       const wsTemp = XLSX.utils.json_to_sheet(tempRows);
       XLSX.utils.book_append_sheet(wb, wsTemp, "Temperature Logs");
@@ -500,16 +612,23 @@ export default function App() {
     }
   };
 
-  const handleEndShift = async () => {
+  const handleEndShift = async (closedBy?: string) => {
     const newStatus = !isShiftEnded;
+    if (newStatus && !closedBy) {
+      showToast("Please select who is closing shift.", "error");
+      return;
+    }
     const res = await apiFetch('/api/end-shift', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ended: newStatus })
+      body: JSON.stringify({ ended: newStatus, closedBy })
     });
     if (res.ok) {
       setIsShiftEnded(newStatus);
       showToast(newStatus ? "Shift ended. Telegram sent." : "Shift reopened");
+    } else {
+      const data = await res.json();
+      showToast(data.error || "Failed to update shift status", "error");
     }
   };
 
@@ -521,9 +640,9 @@ export default function App() {
     });
     if (res.ok) {
       setSelectedTimezone(tz);
-      const today = getTodayInTimezone(tz);
-      setSelectedDate(today);
-      setExportRange({ start: today, end: today });
+      const businessDate = getBusinessDateInTimezone(tz);
+      setSelectedDate(businessDate);
+      setExportRange({ start: businessDate, end: businessDate });
       showToast("Timezone updated");
     }
   };
@@ -587,11 +706,19 @@ export default function App() {
                 showToast("Shift has ended. Only admins can reopen.", "error");
                 return;
               }
-              triggerConfirm(
-                isShiftEnded ? 'Reopen Shift' : 'End Shift',
-                isShiftEnded ? 'Are you sure you want to reopen the shift?' : 'End shift and lock checklist? This will notify the team.',
-                handleEndShift
-              );
+              if (isShiftEnded) {
+                triggerConfirm(
+                  'Reopen Shift',
+                  'Are you sure you want to reopen the shift?',
+                  () => handleEndShift()
+                );
+                return;
+              }
+              if (staffList.length === 0) {
+                showToast("Add at least one staff member before ending shift.", "error");
+                return;
+              }
+              setSelectingStaffForShiftClose(true);
             }}
             className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all shadow-sm ${
               isShiftEnded 
@@ -921,8 +1048,8 @@ export default function App() {
                     logs.map(log => (
                       <div key={log.id} className="bg-white p-4 rounded-2xl border border-stone-200 flex items-center justify-between">
                         <div>
-                          <p className="font-bold text-stone-800">{log.taskName || `Task #${log.taskId}`}</p>
-                          <p className="text-xs text-stone-500">Completed by <span className="font-bold text-emerald-600">{log.staffName || `Staff #${log.staffId}`}</span></p>
+                          <p className="font-bold text-stone-800">{getDisplayTaskName(log.taskName, log.taskId)}</p>
+                          <p className="text-xs text-stone-500">Completed by <span className="font-bold text-emerald-600">{getDisplayStaffName(log.staffName, log.staffId)}</span></p>
                         </div>
                         <div className="flex items-center gap-4">
                           <div className="text-right">
@@ -962,7 +1089,7 @@ export default function App() {
                             </span>
                             <p className="font-bold text-stone-800">{log.location}</p>
                           </div>
-                          <p className="text-xs text-stone-500 mt-1">Logged by <span className="font-bold text-emerald-600">{log.staffName || `Staff #${log.staffId}`}</span></p>
+                          <p className="text-xs text-stone-500 mt-1">Logged by <span className="font-bold text-emerald-600">{getDisplayStaffName(log.staffName, log.staffId)}</span></p>
                         </div>
                         <div className="flex items-center gap-4">
                           <div className="text-right">
@@ -1005,13 +1132,13 @@ export default function App() {
               
               <div className="space-y-3">
                 <h2 className="text-xs font-black text-stone-400 uppercase tracking-[0.2em] px-1">Today's Readings</h2>
-                {tempLogs.filter(l => l.date === new Date().toISOString().split('T')[0]).length === 0 ? (
+                {tempLogs.filter(l => l.date === todayBusinessDate).length === 0 ? (
                   <div className="text-center py-12 bg-white rounded-2xl border border-dashed border-stone-200">
                     <Thermometer className="w-12 h-12 text-stone-200 mx-auto mb-3" />
                     <p className="text-stone-400 font-medium">No readings logged today</p>
                   </div>
                 ) : (
-                  tempLogs.filter(l => l.date === new Date().toISOString().split('T')[0]).map(log => (
+                  tempLogs.filter(l => l.date === todayBusinessDate).map(log => (
                     <div key={log.id} className="bg-white p-4 rounded-2xl border border-stone-200 flex items-center justify-between">
                       <div>
                         <div className="flex items-center gap-2">
@@ -1022,7 +1149,7 @@ export default function App() {
                           </span>
                           <p className="font-bold text-stone-800">{log.location}</p>
                         </div>
-                        <p className="text-xs text-stone-500 mt-1">Logged by <span className="font-bold text-emerald-600">{log.staffName || `Staff #${log.staffId}`}</span></p>
+                        <p className="text-xs text-stone-500 mt-1">Logged by <span className="font-bold text-emerald-600">{getDisplayStaffName(log.staffName, log.staffId)}</span></p>
                       </div>
                       <div className="flex items-center gap-4">
                         <div className="text-right">
@@ -1156,12 +1283,9 @@ export default function App() {
                         onChange={(e) => updateTimezone(e.target.value)}
                         className="w-full p-4 bg-stone-50 border border-stone-200 rounded-2xl font-bold text-stone-800 focus:outline-none"
                       >
-                        <option value="Asia/Singapore">Singapore (GMT+8)</option>
-                        <option value="Asia/Kuala_Lumpur">Kuala Lumpur (GMT+8)</option>
-                        <option value="Asia/Hong_Kong">Hong Kong (GMT+8)</option>
-                        <option value="Asia/Tokyo">Tokyo (GMT+9)</option>
-                        <option value="Europe/London">London (GMT+0)</option>
-                        <option value="UTC">UTC</option>
+                        {allTimezones.map((tz) => (
+                          <option key={tz} value={tz}>{tz.replaceAll('_', ' ')}</option>
+                        ))}
                       </select>
                       <p className="text-[10px] text-stone-400 mt-2 italic">All logs will use this timezone for timestamps.</p>
                     </div>
@@ -1279,6 +1403,47 @@ export default function App() {
             
             <button 
               onClick={() => setSelectingStaffForTask(null)}
+              className="mt-6 w-full p-4 bg-stone-100 text-stone-600 font-bold rounded-2xl"
+            >
+              Cancel
+            </button>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Staff Selection Modal for Shift Close */}
+      {selectingStaffForShiftClose && (
+        <div className="fixed inset-0 bg-stone-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-6">
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-white w-full max-w-md rounded-3xl p-8 shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
+          >
+            <div className="flex flex-col items-center mb-6">
+              <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mb-3">
+                <Lock className="text-red-600 w-6 h-6" />
+              </div>
+              <h3 className="text-xl font-bold text-stone-900">Who is closing shift?</h3>
+              <p className="text-stone-500 text-sm">This is required before ending shift</p>
+            </div>
+
+            <div className="space-y-2 overflow-y-auto pr-2 custom-scrollbar flex-1">
+              {staffList.map(staff => (
+                <button
+                  key={staff.id}
+                  onClick={async () => {
+                    await handleEndShift(staff.name);
+                    setSelectingStaffForShiftClose(false);
+                  }}
+                  className="w-full text-left p-4 bg-stone-50 hover:bg-red-50 border border-stone-200 hover:border-red-200 rounded-2xl transition-all font-bold text-stone-700 hover:text-red-700"
+                >
+                  {staff.name}
+                </button>
+              ))}
+            </div>
+
+            <button
+              onClick={() => setSelectingStaffForShiftClose(false)}
               className="mt-6 w-full p-4 bg-stone-100 text-stone-600 font-bold rounded-2xl"
             >
               Cancel

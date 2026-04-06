@@ -162,6 +162,62 @@ function attachCompleted(tasks: EntityRow[], logs: EntityRow[]) {
   }));
 }
 
+async function fetchTaskAndStaffMaps() {
+  const [tasks, staff] = await Promise.all([
+    queryMany<{ id: string | number; name?: string | null }>(
+      supabase.from('tasks').select('id, name').not('name', 'is', null),
+      'fetch task map',
+    ),
+    queryMany<{ id: string | number; name?: string | null }>(
+      supabase.from('staff').select('id, name').not('name', 'is', null),
+      'fetch staff map',
+    ),
+  ]);
+
+  return {
+    taskMap: new Map(tasks.map((task) => [String(task.id), String(task.name ?? '')])),
+    staffMap: new Map(staff.map((member) => [String(member.id), String(member.name ?? '')])),
+  };
+}
+
+const taskPlaceholderPattern = /^Task\s*#\d+$/i;
+const staffPlaceholderPattern = /^Staff\s*#\d+$/i;
+
+function normalizeTaskName(rawValue: unknown, fallbackById?: string) {
+  const normalized = String(rawValue ?? '').trim();
+  if (!normalized || taskPlaceholderPattern.test(normalized)) {
+    return fallbackById || 'Unknown Task';
+  }
+  return normalized;
+}
+
+function normalizeStaffName(rawValue: unknown, fallbackById?: string) {
+  const normalized = String(rawValue ?? '').trim();
+  if (!normalized || staffPlaceholderPattern.test(normalized)) {
+    return fallbackById || 'Unknown Staff';
+  }
+  return normalized;
+}
+
+async function enrichChecklistLogs(logs: EntityRow[]) {
+  if (logs.length === 0) return logs;
+  const { taskMap, staffMap } = await fetchTaskAndStaffMaps();
+  return logs.map((log) => ({
+    ...log,
+    taskName: normalizeTaskName(log.taskName, taskMap.get(String(log.taskId))),
+    staffName: normalizeStaffName(log.staffName, staffMap.get(String(log.staffId))),
+  }));
+}
+
+async function enrichTemperatureLogs(logs: EntityRow[]) {
+  if (logs.length === 0) return logs;
+  const { staffMap } = await fetchTaskAndStaffMaps();
+  return logs.map((log) => ({
+    ...log,
+    staffName: normalizeStaffName(log.staffName, staffMap.get(String(log.staffId))),
+  }));
+}
+
 async function sendTelegramShiftEndMessage(closedBy: string, date: string, time: string) {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
     throw new Error('Missing VITE_TELEGRAM_BOT_TOKEN or VITE_TELEGRAM_CHAT_ID in .env');
@@ -204,8 +260,8 @@ async function resolveTaskAndStaffNames(taskId: string | number, staffId: string
   ]);
 
   return {
-    taskName: task?.name || `Task #${taskId}`,
-    staffName: staff?.name || `Staff #${staffId}`,
+    taskName: task?.name || 'Unknown Task',
+    staffName: staff?.name || 'Unknown Staff',
   };
 }
 
@@ -214,7 +270,7 @@ async function resolveStaffName(staffId: string | number) {
     supabase.from('staff').select('name').eq('id', staffId).limit(1).maybeSingle(),
     'resolve staff name',
   );
-  return staff?.name || `Staff #${staffId}`;
+  return staff?.name || 'Unknown Staff';
 }
 
 function formatChecklistSummary(logs: EntityRow[]) {
@@ -223,8 +279,8 @@ function formatChecklistSummary(logs: EntityRow[]) {
   }
 
   const lines = logs.slice(0, 20).map((log) => {
-    const taskName = String(log.taskName || `Task #${String(log.taskId || '')}`);
-    const staffName = String(log.staffName || `Staff #${String(log.staffId || '')}`);
+    const taskName = String(log.taskName || 'Unknown Task');
+    const staffName = String(log.staffName || 'Unknown Staff');
     return `- ${taskName} (${staffName})`;
   });
 
@@ -284,7 +340,11 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
 
     if (path === '/api/end-shift' && method === 'POST') {
       const ended = Boolean(body.ended);
-      const closedBy = ended ? String(body.closedBy ?? '') : '';
+      const closedBy = ended ? String(body.closedBy ?? '').trim() : '';
+
+      if (ended && !closedBy) {
+        return jsonResponse({ error: 'closedBy is required when ending shift' }, 400);
+      }
 
       if (ended) {
         const { date, time } = await getLocalTime();
@@ -295,7 +355,7 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
         const summary = formatChecklistSummary(dailyLogs);
 
         await sendTelegramShiftEndMessage(
-          closedBy || 'Unknown',
+          closedBy,
           date,
           time,
         );
@@ -314,7 +374,7 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
           }
         }
         await setSetting('shift_ended', 'true');
-        await setSetting('shift_closed_by', closedBy || 'Unknown');
+        await setSetting('shift_closed_by', closedBy);
         await setSetting('shift_closed_at', `${date} ${time}`);
       } else {
         await setSetting('shift_ended', 'false');
@@ -409,6 +469,14 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
       const staff = await queryMany<EntityRow>(
         supabase.from('staff').select('*').eq('isActive', true).order('sortOrder', { ascending: true }).order('id', { ascending: true }),
         'list staff',
+      );
+      return jsonResponse(staff);
+    }
+
+    if (path === '/api/staff/all' && method === 'GET') {
+      const staff = await queryMany<EntityRow>(
+        supabase.from('staff').select('*').order('sortOrder', { ascending: true }).order('id', { ascending: true }),
+        'list all staff',
       );
       return jsonResponse(staff);
     }
@@ -509,7 +577,7 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
         query.order('date', { ascending: false }).order('timestamp', { ascending: false }),
         'list logs',
       );
-      return jsonResponse(logs);
+      return jsonResponse(await enrichChecklistLogs(logs));
     }
 
     if (path === '/api/temperature-logs' && method === 'GET') {
@@ -526,7 +594,7 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
         query.order('date', { ascending: false }).order('timestamp', { ascending: false }),
         'list temperature logs',
       );
-      return jsonResponse(logs);
+      return jsonResponse(await enrichTemperatureLogs(logs));
     }
 
     if (path === '/api/temperature-logs' && method === 'POST') {
