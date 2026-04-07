@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   CheckCircle2, 
   ClipboardList, 
@@ -38,6 +38,8 @@ import { Task, Staff, Log, TemperatureLog, Category, TimeSlot, TabType } from '.
 import { apiFetch } from './service/apiClient';
 
 const TELEGRAM_CHAT_ID = import.meta.env.VITE_TELEGRAM_CHAT_ID ?? '';
+const SHIFT_OPEN_HOUR = 7;
+const SHIFT_OPEN_MINUTE = 30;
 
 const SortableTaskItem: React.FC<{ 
   task: Task; 
@@ -170,6 +172,7 @@ export default function App() {
   const [logs, setLogs] = useState<Log[]>([]);
   const [tempLogs, setTempLogs] = useState<TemperatureLog[]>([]);
   const [isShiftEnded, setIsShiftEnded] = useState(false);
+  const [shiftClosedBy, setShiftClosedBy] = useState<string | null>(null);
   const [selectedTimezone, setSelectedTimezone] = useState("Asia/Kuala_Lumpur");
   
   const getBusinessDateInTimezone = (tz: string) => {
@@ -193,7 +196,7 @@ export default function App() {
     const minute = Number(getPart('minute'));
 
     const businessDate = new Date(Date.UTC(year, month - 1, day));
-    if (hour < 7 || (hour === 7 && minute < 30)) {
+    if (hour < SHIFT_OPEN_HOUR || (hour === SHIFT_OPEN_HOUR && minute < SHIFT_OPEN_MINUTE)) {
       businessDate.setUTCDate(businessDate.getUTCDate() - 1);
     }
 
@@ -203,12 +206,31 @@ export default function App() {
     return `${businessYear}-${businessMonth}-${businessDay}`;
   };
 
+  const getRecentDateOptions = (startDate: string, days: number) => {
+    const options: string[] = [];
+    const cursor = new Date(`${startDate}T00:00:00Z`);
+    for (let i = 0; i < days; i += 1) {
+      const year = cursor.getUTCFullYear();
+      const month = String(cursor.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(cursor.getUTCDate()).padStart(2, '0');
+      options.push(`${year}-${month}-${day}`);
+      cursor.setUTCDate(cursor.getUTCDate() - 1);
+    }
+    return options;
+  };
+
   const [selectedDate, setSelectedDate] = useState(getBusinessDateInTimezone("Asia/Kuala_Lumpur"));
+  const [checklistDate, setChecklistDate] = useState(getBusinessDateInTimezone("Asia/Kuala_Lumpur"));
   const [exportRange, setExportRange] = useState({
     start: getBusinessDateInTimezone("Asia/Kuala_Lumpur"),
     end: getBusinessDateInTimezone("Asia/Kuala_Lumpur")
   });
   const todayBusinessDate = getBusinessDateInTimezone(selectedTimezone);
+  const checklistDateOptions = useMemo(
+    () => getRecentDateOptions(todayBusinessDate, 14),
+    [todayBusinessDate]
+  );
+  const isChecklistHistoricalView = checklistDate !== todayBusinessDate;
   const allTimezones = useMemo(() => {
     const tzSource = (Intl as unknown as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf;
     const values = typeof tzSource === 'function' ? tzSource('timeZone') : [];
@@ -216,6 +238,8 @@ export default function App() {
   }, [selectedTimezone]);
   const [checklist, setChecklist] = useState<(Task & { completed: number })[]>([]);
   const [logVariant, setLogVariant] = useState<'checklist' | 'temperatures'>('checklist');
+  const lastObservedBusinessDateRef = useRef(todayBusinessDate);
+  const settingsRequestIdRef = useRef(0);
   const taskPlaceholderPattern = /^Task\s*#\d+$/i;
   const staffPlaceholderPattern = /^Staff\s*#\d+$/i;
   const taskNameById = useMemo(
@@ -304,22 +328,23 @@ export default function App() {
   // Selection states
   const [selectingStaffForTask, setSelectingStaffForTask] = useState<string | number | null>(null);
   const [selectingStaffForShiftClose, setSelectingStaffForShiftClose] = useState(false);
+  const [isShiftActionPending, setIsShiftActionPending] = useState(false);
   const [editingStaff, setEditingStaff] = useState<Staff | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
 
-  const refreshAll = async () => {
+  const refreshAll = async (dateForLogs = selectedDate, dateForChecklist = checklistDate) => {
     setIsRefreshing(true);
     await Promise.all([
       fetchStaff(),
       fetchCategories(),
       fetchTimeSlots(),
       fetchTasks(),
-      fetchChecklist(),
+      fetchChecklist(dateForChecklist),
       fetchAdminPin(),
       fetchSettings(),
       fetchShiftStatus(),
-      fetchLogs(selectedDate),
-      fetchTempLogs(selectedDate)
+      fetchLogs(dateForLogs),
+      fetchTempLogs(dateForLogs)
     ]);
     setIsRefreshing(false);
     pullDistance.set(0);
@@ -337,30 +362,38 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    lastObservedBusinessDateRef.current = getBusinessDateInTimezone(selectedTimezone);
 
-    const scheduleNextChecklistRefresh = () => {
-      const now = new Date();
-      const next = new Date(now);
-      next.setHours(7, 30, 0, 0);
-      if (next <= now) {
-        next.setDate(next.getDate() + 1);
+    const checkBusinessDateRollover = async () => {
+      const currentBusinessDate = getBusinessDateInTimezone(selectedTimezone);
+      if (currentBusinessDate === lastObservedBusinessDateRef.current) {
+        return;
       }
 
-      timeoutId = setTimeout(async () => {
-        await refreshAll();
-        scheduleNextChecklistRefresh();
-      }, next.getTime() - now.getTime());
+      lastObservedBusinessDateRef.current = currentBusinessDate;
+      setSelectedDate(currentBusinessDate);
+      setChecklistDate(currentBusinessDate);
+      setExportRange({ start: currentBusinessDate, end: currentBusinessDate });
+      await refreshAll(currentBusinessDate, currentBusinessDate);
     };
 
-    scheduleNextChecklistRefresh();
+    const intervalId = setInterval(() => {
+      checkBusinessDateRollover();
+      fetchShiftStatus();
+    }, 30 * 1000);
+
+    const visibilityHandler = () => {
+      if (document.visibilityState === 'visible') {
+        checkBusinessDateRollover();
+      }
+    };
+    document.addEventListener('visibilitychange', visibilityHandler);
 
     return () => {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
+      clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', visibilityHandler);
     };
-  }, [selectedDate]);
+  }, [selectedTimezone, selectedDate]);
 
   const readJsonSafe = async (res: Response) => {
     try {
@@ -380,12 +413,18 @@ export default function App() {
   };
 
   const fetchSettings = async () => {
+    const requestId = settingsRequestIdRef.current + 1;
+    settingsRequestIdRef.current = requestId;
     const res = await apiFetch('/api/settings');
     const data = await readJsonSafe(res);
+    if (requestId !== settingsRequestIdRef.current) {
+      return;
+    }
     if (res.ok && data?.timezone) {
       setSelectedTimezone(data.timezone);
       const businessDate = getBusinessDateInTimezone(data.timezone);
       setSelectedDate(businessDate);
+      setChecklistDate(businessDate);
       setExportRange({ start: businessDate, end: businessDate });
     } else if (!res.ok) {
       console.error('[APP] fetch settings:', data);
@@ -397,6 +436,7 @@ export default function App() {
     const data = await readJsonSafe(res);
     if (res.ok) {
       setIsShiftEnded(Boolean(data?.ended));
+      setShiftClosedBy(data?.closedBy ? String(data.closedBy) : null);
     } else {
       console.error('[APP] fetch shift status:', data);
     }
@@ -440,11 +480,11 @@ export default function App() {
   const fetchTasks = async () => {
     const res = await apiFetch('/api/tasks');
     setTasks(await readArrayResponse(res, 'fetch tasks'));
-    fetchChecklist(); // Ensure checklist is updated when tasks change
+    fetchChecklist(checklistDate); // Ensure checklist is updated when tasks change
   };
 
-  const fetchChecklist = async () => {
-    const res = await apiFetch('/api/checklist');
+  const fetchChecklist = async (date = checklistDate) => {
+    const res = await apiFetch(`/api/checklist?date=${date}`);
     setChecklist(await readArrayResponse(res, 'fetch checklist') as (Task & { completed: number })[]);
   };
 
@@ -487,6 +527,10 @@ export default function App() {
   };
 
   const handleCompleteTask = async (taskId: number, staffId: number) => {
+    if (isChecklistHistoricalView) {
+      showToast("Viewing past date. Switch to today's checklist to edit.", "error");
+      return;
+    }
     if (isShiftEnded && !isAdmin) {
       showToast("Shift has ended. Only admins can edit.", "error");
       return;
@@ -498,8 +542,9 @@ export default function App() {
     });
     if (res.ok) {
       setSelectedDate(todayBusinessDate);
+      setChecklistDate(todayBusinessDate);
       setSelectingStaffForTask(null);
-      fetchChecklist();
+      fetchChecklist(todayBusinessDate);
       fetchLogs(todayBusinessDate);
     } else {
       const data = await res.json();
@@ -508,6 +553,10 @@ export default function App() {
   };
 
   const handleUntickTask = async (taskId: number) => {
+    if (isChecklistHistoricalView) {
+      showToast("Viewing past date. Switch to today's checklist to edit.", "error");
+      return;
+    }
     if (isShiftEnded && !isAdmin) {
       showToast("Shift has ended. Only admins can edit.", "error");
       return;
@@ -516,7 +565,7 @@ export default function App() {
       method: 'DELETE'
     });
     if (res.ok) {
-      fetchChecklist();
+      fetchChecklist(todayBusinessDate);
     }
   };
 
@@ -613,11 +662,15 @@ export default function App() {
   };
 
   const handleEndShift = async (closedBy?: string) => {
+    if (isShiftActionPending) {
+      return;
+    }
     const newStatus = !isShiftEnded;
     if (newStatus && !closedBy) {
       showToast("Please select who is closing shift.", "error");
       return;
     }
+    setIsShiftActionPending(true);
     const res = await apiFetch('/api/end-shift', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -625,11 +678,13 @@ export default function App() {
     });
     if (res.ok) {
       setIsShiftEnded(newStatus);
+      setShiftClosedBy(newStatus ? (closedBy || 'Unknown') : null);
       showToast(newStatus ? "Shift ended. Telegram sent." : "Shift reopened");
     } else {
       const data = await res.json();
       showToast(data.error || "Failed to update shift status", "error");
     }
+    setIsShiftActionPending(false);
   };
 
   const updateTimezone = async (tz: string) => {
@@ -642,6 +697,7 @@ export default function App() {
       setSelectedTimezone(tz);
       const businessDate = getBusinessDateInTimezone(tz);
       setSelectedDate(businessDate);
+      setChecklistDate(businessDate);
       setExportRange({ start: businessDate, end: businessDate });
       showToast("Timezone updated");
     }
@@ -702,6 +758,9 @@ export default function App() {
         <div className="flex items-center gap-3">
           <button 
             onClick={() => {
+              if (isShiftActionPending) {
+                return;
+              }
               if (isShiftEnded && !isAdmin) {
                 showToast("Shift has ended. Only admins can reopen.", "error");
                 return;
@@ -725,8 +784,9 @@ export default function App() {
                 ? 'bg-stone-800 text-white hover:bg-stone-900' 
                 : 'bg-red-600 text-white hover:bg-red-700 shadow-red-600/20'
             }`}
+            disabled={isShiftActionPending}
           >
-            {isShiftEnded ? 'Reopen Shift' : 'End Shift'}
+            {isShiftActionPending ? 'Please wait...' : (isShiftEnded ? 'Reopen Shift' : 'End Shift')}
           </button>
           <div className="h-8 w-[1px] bg-stone-200 mx-1 hidden sm:block"></div>
           <div className="flex items-center gap-3">
@@ -1435,6 +1495,7 @@ export default function App() {
                     await handleEndShift(staff.name);
                     setSelectingStaffForShiftClose(false);
                   }}
+                  disabled={isShiftActionPending}
                   className="w-full text-left p-4 bg-stone-50 hover:bg-red-50 border border-stone-200 hover:border-red-200 rounded-2xl transition-all font-bold text-stone-700 hover:text-red-700"
                 >
                   {staff.name}

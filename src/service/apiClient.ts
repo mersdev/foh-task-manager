@@ -5,6 +5,8 @@ type AppSettingRow = { key: string; value: string | null };
 
 const TELEGRAM_BOT_TOKEN = import.meta.env.VITE_TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = import.meta.env.VITE_TELEGRAM_CHAT_ID;
+const DAILY_RESET_HOUR = 7;
+const DAILY_RESET_MINUTE = 30;
 
 function jsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -135,8 +137,8 @@ async function getLocalTime() {
   const minute = Number(getPart('minute'));
   const second = getPart('second');
 
-  const resetHour = 7;
-  const resetMinute = 30;
+  const resetHour = DAILY_RESET_HOUR;
+  const resetMinute = DAILY_RESET_MINUTE;
 
   const businessDate = new Date(Date.UTC(year, month - 1, day));
   if (hour < resetHour || (hour === resetHour && minute < resetMinute)) {
@@ -148,8 +150,45 @@ async function getLocalTime() {
   const businessDay = String(businessDate.getUTCDate()).padStart(2, '0');
 
   return {
+    localDate: `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
     date: `${businessYear}-${businessMonth}-${businessDay}`,
     time: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${second}`,
+    hour,
+    minute,
+  };
+}
+
+function extractDatePrefix(value: string | null | undefined) {
+  const match = String(value ?? '').trim().match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : '';
+}
+
+async function autoManageShiftState(settings?: Record<string, string>) {
+  const currentSettings = settings ?? await fetchSettingsMap();
+  const shiftEnded = currentSettings.shift_ended === 'true';
+  const { date: businessDate } = await getLocalTime();
+
+  if (!shiftEnded) {
+    return currentSettings;
+  }
+
+  const closedBusinessDate = extractDatePrefix(currentSettings.shift_closed_at);
+
+  if (closedBusinessDate === businessDate) {
+    return currentSettings;
+  }
+
+  await Promise.all([
+    setSetting('shift_ended', 'false'),
+    setSetting('shift_closed_by', ''),
+    setSetting('shift_closed_at', ''),
+  ]);
+
+  return {
+    ...currentSettings,
+    shift_ended: 'false',
+    shift_closed_by: '',
+    shift_closed_at: '',
   };
 }
 
@@ -218,7 +257,7 @@ async function enrichTemperatureLogs(logs: EntityRow[]) {
   }));
 }
 
-async function sendTelegramShiftEndMessage(closedBy: string, date: string, time: string) {
+async function sendTelegramShiftEndMessage(closedBy: string, date: string, time: string, summary: string) {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
     throw new Error('Missing VITE_TELEGRAM_BOT_TOKEN or VITE_TELEGRAM_CHAT_ID in .env');
   }
@@ -228,6 +267,9 @@ async function sendTelegramShiftEndMessage(closedBy: string, date: string, time:
     `Shift ended on ${date} at ${time}.`,
     `Closed by: ${closedBy || 'Unknown'}`,
     'The checklist is now locked.',
+    '',
+    `Completed checklist summary for ${date}:`,
+    summary,
   ].join('\n');
 
   const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -331,7 +373,7 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
     }
 
     if (path === '/api/shift-status' && method === 'GET') {
-      const settings = await fetchSettingsMap();
+      const settings = await autoManageShiftState(await fetchSettingsMap());
       return jsonResponse({
         ended: settings.shift_ended === 'true',
         closedBy: settings.shift_closed_by || null,
@@ -347,6 +389,11 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
       }
 
       if (ended) {
+        const settings = await fetchSettingsMap();
+        if (settings.shift_ended === 'true') {
+          return jsonResponse({ success: true, channel: 'telegram', skipped: 'already-ended' });
+        }
+
         const { date, time } = await getLocalTime();
         const dailyLogs = await queryMany<EntityRow>(
           supabase.from('logs').select('*').eq('date', date).order('timestamp', { ascending: true }),
@@ -358,21 +405,8 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
           closedBy,
           date,
           time,
+          summary,
         );
-        if (TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
-          const detailsResponse = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              chat_id: TELEGRAM_CHAT_ID,
-              text: `Completed checklist summary for ${date}:\n${summary}`,
-            }),
-          });
-          if (!detailsResponse.ok) {
-            const detailsBody = await detailsResponse.text();
-            throw new Error(`Telegram API error (${detailsResponse.status}): ${detailsBody}`);
-          }
-        }
         await setSetting('shift_ended', 'true');
         await setSetting('shift_closed_by', closedBy);
         await setSetting('shift_closed_at', `${date} ${time}`);
@@ -656,7 +690,11 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
     }
 
     if (path === '/api/checklist' && method === 'GET') {
-      const { date } = await getLocalTime();
+      await autoManageShiftState(await fetchSettingsMap());
+      const { date: currentBusinessDate } = await getLocalTime();
+      const requestedDate = String(url.searchParams.get('date') ?? '').trim();
+      const date = requestedDate || currentBusinessDate;
+
       const [tasks, logs] = await Promise.all([
         queryMany<EntityRow>(
           supabase.from('tasks').select('*').eq('isActive', true).order('sortOrder', { ascending: true }).order('id', { ascending: true }),
@@ -669,7 +707,7 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
 
     if (path === '/api/bootstrap' && method === 'GET') {
       const { date } = await getLocalTime();
-      const [staff, categories, timeSlots, tasks, logs, settings] = await Promise.all([
+      const [staff, categories, timeSlots, tasks, logs, rawSettings] = await Promise.all([
         queryMany<EntityRow>(
           supabase.from('staff').select('*').eq('isActive', true).order('sortOrder', { ascending: true }).order('id', { ascending: true }),
           'bootstrap staff',
@@ -689,6 +727,7 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
         queryMany<EntityRow>(supabase.from('logs').select('*').eq('date', date), 'bootstrap logs'),
         fetchSettingsMap(),
       ]);
+      const settings = await autoManageShiftState(rawSettings);
 
       return jsonResponse({
         staff,

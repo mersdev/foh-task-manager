@@ -32,7 +32,7 @@
 - Add/update tests when changing checklist, logs, temperatures, staff/tasks/settings, or Telegram behavior.
 - Prefer scenario-focused names, e.g. `logs.cy.ts` for history/export behavior.
 - Run `npm run test:e2e` before opening a PR.
-- After Cypress test, always run `node scripts/sync-dev-to-local-data.mjs` to re-align local data with dev.
+- After `npm run cypress:run` or `npm run test:e2e`, always run `node scripts/sync-dev-to-local-data.mjs` to re-align local data with dev.
 
 ## Commit & Pull Request Guidelines
 - Prefer Conventional Commit prefixes (`fix:`, `chore:`, `feat:`); avoid `#NA` commits.
