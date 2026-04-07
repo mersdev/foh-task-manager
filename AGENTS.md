@@ -50,3 +50,8 @@
 - Required pre-change sequence: `supabase link --project-ref <project_ref>`, `supabase db dump --data-only -f supabase/backup/<timestamp>_data.sql`, then `supabase db pull`.
 - Create intentional schema changes with `supabase migration new <name>` (or `supabase db diff`) and commit migration SQL.
 - If local/remote migration history diverges, use `supabase migration repair --status applied|reverted <version>` and then re-run `supabase db pull`.
+- Before resetting either `local` or `dev`, first confirm the other environment has the latest data snapshot.
+- If the other environment is not up to date, sync first:
+  - `node scripts/sync-dev-to-local-data.mjs` (dev -> local)
+  - `node scripts/sync-local-to-dev-data.mjs` (local -> dev)
+- Only run reset (`npm run db:reset` with the right `SUPABASE_TARGET`) after the latest-data check passes or sync is completed.
