@@ -5,8 +5,6 @@
 # FOH Task Manager
 
 This app is a React + TypeScript frontend served by Vite.
-- Local mode uses Supabase project `foh-task-manager-local`.
-- Dev mode uses Supabase project `foh-task-manager-dev`.
 
 ## Functions In The App
 
@@ -105,26 +103,19 @@ This app is a React + TypeScript frontend served by Vite.
 1. Install dependencies:
    `npm install`
 2. Set these in `.env` (or `.env.local`):
-   - `VITE_APP_ENV=local`
-   - `VITE_SUPABASE_URL_LOCAL`
-   - `VITE_SUPABASE_ANON_KEY_LOCAL`
+   - `VITE_SUPABASE_URL`
+   - `VITE_SUPABASE_ANON_KEY`
    - `VITE_TELEGRAM_BOT_TOKEN`
    - `VITE_TELEGRAM_CHAT_ID`
 3. Run:
    `npm run dev`
-
-## Dev Environment (Supabase)
-
-Set `VITE_APP_ENV=dev` and configure:
-- `VITE_SUPABASE_URL_DEV`
-- `VITE_SUPABASE_ANON_KEY_DEV`
 
 ## Utility Scripts
 
 - Sync latest schema from `foh-task-manager-dev` into migrations:
   `npm run db:sync-dev-migrations`
   - If DNS to `db.<project-ref>.supabase.co` fails in containerized tooling, set either:
-    - `SUPABASE_DB_URL_DEV` (percent-encoded Postgres URL), or
+    - `SUPABASE_DB_URL` (percent-encoded Postgres URL), or
     - `SUPABASE_DB_PASSWORD` (script builds URL from `supabase/.temp/pooler-url`).
 - Align `foh-task-manager-local` with migrations and reseed:
   `npm run db:align-local`
